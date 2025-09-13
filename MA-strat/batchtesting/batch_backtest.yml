@@ -1,0 +1,60 @@
+
+# Example config for MA multi-window portfolio report
+# Save as batch_backtest.yml and run:
+#   python ma_multi_window_report.py --config batch_backtest.yml
+
+universe_label: "SP500-Sector-MATest"
+tickers: ["QQQ", "SPY", "MSFT", "PFE", "JPM", "HD", "KO", "GE", "XOM", "SO", "DOW", "AMT", "T"]
+
+overall:
+  start: "2001-01-01"
+  end: "2025-09-01"
+
+windows:
+  equal_slices: 10
+  include_rolling_3y: true
+  rolling_step_years: 1
+
+common:
+  initial_capital: 100000
+  slippage_pct: 0.0
+  fee_per_trade: 0.0
+  min_data_fraction: 0.8
+
+strategies:
+  # S1, entry slope SMA 20 rising, exit price below SMA 200
+  - name: "S1_SMA20slope_UP_exit_PRICEbelow_SMA200"
+    ma_type: "sma"
+    ma_len: 200
+    ma_len_price: 200
+    ma_len_slope: 20
+    entry_rule: "slope_up"
+    exit_rule: "price_below"
+    entry_confirm_bars: 1
+    exit_confirm_bars: 1
+
+  # S2, entry slope SMA 200 rising, exit price below SMA 200
+  - name: "S2_SMA200slope_UP_exit_PRICEbelow_SMA200"
+    ma_type: "sma"
+    ma_len: 200
+    ma_len_price: 200
+    ma_len_slope: 200
+    entry_rule: "slope_up"
+    exit_rule: "price_below"
+    entry_confirm_bars: 1
+    exit_confirm_bars: 1
+
+  # S3, entry slope SMA 50 rising, exit price below SMA 200
+  - name: "S3_SMA50slope_UP_exit_PRICEbelow_SMA200"
+    ma_type: "sma"
+    ma_len: 200
+    ma_len_price: 200
+    ma_len_slope: 50
+    entry_rule: "slope_up"
+    exit_rule: "price_below"
+    entry_confirm_bars: 1
+    exit_confirm_bars: 1
+
+output:
+  # You can keep this pattern, the script will fill the timestamp automatically if you leave it blank
+  workbook_path: "SP500-Sector-MATest-Report.xlsx"
