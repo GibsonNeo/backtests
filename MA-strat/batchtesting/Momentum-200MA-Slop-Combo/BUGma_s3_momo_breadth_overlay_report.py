@@ -12,9 +12,6 @@ Features
 - New baseline S2_EQ_SPY_QQQ_5050, equal weight SPY and QQQ, each gated by S3, otherwise cash
 - Windows, equal slices and rolling 3 year with step in years
 - Uses Close only, all pnl is close to close, cash earns zero out of market
-
-Notes
-- This script expects a YAML at runtime, see the example config produced next to this file
 """
 
 from dataclasses import dataclass
@@ -51,23 +48,40 @@ class Config:
 def _sma(s: pd.Series, n: int) -> pd.Series:
     return s.rolling(n, min_periods=n).mean()
 
+def _ensure_series(x) -> pd.Series:
+    """Coerce a possible one column frame into a Series, preserve index and name."""
+    if isinstance(x, pd.DataFrame):
+        x = x.squeeze("columns")
+    if not isinstance(x, pd.Series):
+        x = pd.Series(x)
+    if not isinstance(x.index, pd.DatetimeIndex):
+        x.index = pd.to_datetime(x.index)
+    return x
+
 def _s3_position(close: pd.Series) -> pd.Series:
     """State machine, entry when SMA200 slope up, exit on slope down or price below SMA200"""
+    close = _ensure_series(close).sort_index().astype(float)
+    if close.name is None:
+        close.name = "close"
     ma = _sma(close, 200)
-    slope_up = (ma > ma.shift(1)).fillna(False)
-    slope_down = (ma < ma.shift(1)).fillna(False)
-    price_below = (close < ma).fillna(False)
+    slope_up = (ma > ma.shift(1)).fillna(False).astype(bool)
+    slope_down = (ma < ma.shift(1)).fillna(False).astype(bool)
+    price_below = (close < ma).fillna(False).astype(bool)
     pos = np.zeros(len(close), dtype=int)
     in_pos = False
+    # Use .iat with integer position, after coercing to numpy bools
+    su = slope_up.to_numpy(dtype=bool, copy=False)
+    sd = slope_down.to_numpy(dtype=bool, copy=False)
+    pb = price_below.to_numpy(dtype=bool, copy=False)
     for i in range(len(close)):
         if not in_pos:
-            if bool(slope_up.iat[i]):
+            if su[i]:
                 in_pos = True
                 pos[i] = 1
             else:
                 pos[i] = 0
         else:
-            if bool(slope_down.iat[i]) or bool(price_below.iat[i]):
+            if sd[i] or pb[i]:
                 in_pos = False
                 pos[i] = 0
             else:
@@ -76,9 +90,11 @@ def _s3_position(close: pd.Series) -> pd.Series:
 
 def _momentum_12_1(close: pd.Series) -> pd.Series:
     """Total return 252 day minus last 21 day return, classic 12 minus 1 momentum approximation"""
+    close = _ensure_series(close).sort_index().astype(float)
     ret_12 = close.pct_change(252, fill_method=None)
     ret_1 = close.pct_change(21, fill_method=None)
     score = ret_12.fillna(0.0) - ret_1.fillna(0.0)
+    score.name = close.name
     return score
 
 def _rebalance_dates(index: pd.DatetimeIndex, cadence: str) -> pd.DatetimeIndex:
@@ -97,7 +113,7 @@ def _rebalance_dates(index: pd.DatetimeIndex, cadence: str) -> pd.DatetimeIndex:
     raise ValueError("cadence must be weekly, monthly, quarterly, or semiannual")
 
 def _metrics_from_equity(eq: pd.Series) -> Dict[str, float]:
-    eq = eq.dropna()
+    eq = _ensure_series(eq).dropna()
     if eq.empty:
         return dict(cagr=0.0, sharpe=0.0, mdd=0.0)
     rets = eq.pct_change(fill_method=None).fillna(0.0)
@@ -113,9 +129,11 @@ def _metrics_from_equity(eq: pd.Series) -> Dict[str, float]:
     return dict(cagr=cagr, sharpe=sharpe, mdd=mdd)
 
 def _buyhold_equity(close: pd.Series, initial: float) -> pd.Series:
+    close = _ensure_series(close).sort_index().astype(float)
     rets = close.pct_change(fill_method=None).fillna(0.0)
     eq = initial * (1.0 + rets).cumprod()
     eq.iloc[0] = initial
+    eq.name = "buyhold"
     return eq
 
 def _load_close(ticker: str, start: str, end: str) -> pd.Series:
@@ -134,10 +152,10 @@ def _load_close(ticker: str, start: str, end: str) -> pd.Series:
 def build_universe(tickers: List[str], start: str, end: str) -> Tuple[pd.DatetimeIndex, Dict[str, pd.Series], Dict[str, pd.Series], Dict[str, pd.Series]]:
     closes = {}
     for t in tickers:
-        s = _load_close(t, start, end).astype(float)
-        closes[t] = s
+        s = _load_close(t, start, end)
+        closes[t] = _ensure_series(s).astype(float)
     all_index = pd.DatetimeIndex(sorted(set().union(*[s.index for s in closes.values()])))
-    close_by = {t: s.reindex(all_index).ffill() for t, s in closes.items()}
+    close_by = {t: closes[t].reindex(all_index).ffill() for t in tickers}
     s3_by = {t: _s3_position(close_by[t]) for t in tickers}
     mom_by = {t: _momentum_12_1(close_by[t]) for t in tickers}
     return all_index, close_by, s3_by, mom_by
@@ -183,31 +201,30 @@ def build_windows(index: pd.DatetimeIndex, equal_slices: int, include_rolling_3y
     return out
 
 def portfolio_s3_baseline(index: pd.DatetimeIndex, close_by: Dict[str, pd.Series], s3_by: Dict[str, pd.Series], tickers: List[str], initial: float) -> pd.Series:
-    rets = pd.DataFrame({t: close_by[t].pct_change(fill_method=None).fillna(0.0) for t in tickers}).reindex(index).fillna(0.0)
-    pos = pd.DataFrame({t: s3_by[t].reindex(index).fillna(0).astype(int) for t in tickers})
+    rets = pd.DataFrame({t: _ensure_series(close_by[t]).pct_change(fill_method=None).fillna(0.0) for t in tickers}).reindex(index).fillna(0.0)
+    pos = pd.DataFrame({t: _ensure_series(s3_by[t]).reindex(index).fillna(0).astype(int) for t in tickers})
     w = 1.0 / len(tickers) if len(tickers) > 0 else 0.0
     port_rets = (rets * pos * w).sum(axis=1)
     eq = initial * (1.0 + port_rets).cumprod()
     eq.iloc[0] = initial
+    eq.name = "S3_Baseline"
     return eq
 
 def portfolio_spy_qqq_5050(index: pd.DatetimeIndex, close_by: Dict[str, pd.Series], s3_by: Dict[str, pd.Series], initial: float) -> pd.Series:
-    needed = []
-    for t in ["SPY","QQQ"]:
-        if t in close_by:
-            needed.append(t)
+    needed = [t for t in ["SPY","QQQ"] if t in close_by]
     if not needed:
-        return pd.Series(initial, index=index)
-    rets = pd.DataFrame({t: close_by[t].pct_change(fill_method=None).fillna(0.0) for t in needed}).reindex(index).fillna(0.0)
-    pos = pd.DataFrame({t: s3_by[t].reindex(index).fillna(0).astype(int) for t in needed})
+        return pd.Series(initial, index=index, name="EQ_SPY_QQQ_5050")
+    rets = pd.DataFrame({t: _ensure_series(close_by[t]).pct_change(fill_method=None).fillna(0.0) for t in needed}).reindex(index).fillna(0.0)
+    pos = pd.DataFrame({t: _ensure_series(s3_by[t]).reindex(index).fillna(0).astype(int) for t in needed})
     w = 0.5
-    port_rets = 0.0
+    port = pd.Series(0.0, index=index)
     if "QQQ" in needed:
-        port_rets = port_rets + w * rets.get("QQQ", 0.0) * pos.get("QQQ", 0)
+        port = port.add(w * rets["QQQ"] * pos["QQQ"], fill_value=0.0)
     if "SPY" in needed:
-        port_rets = port_rets + w * rets.get("SPY", 0.0) * pos.get("SPY", 0)
-    eq = initial * (1.0 + pd.Series(port_rets, index=index)).cumprod()
+        port = port.add(w * rets["SPY"] * pos["SPY"], fill_value=0.0)
+    eq = initial * (1.0 + port).cumprod()
     eq.iloc[0] = initial
+    eq.name = "EQ_SPY_QQQ_5050"
     return eq
 
 def portfolio_momo_topk_overlay(index: pd.DatetimeIndex,
@@ -221,9 +238,9 @@ def portfolio_momo_topk_overlay(index: pd.DatetimeIndex,
                                 initial: float) -> pd.Series:
     tickers = [t for t in universe]
     index = pd.DatetimeIndex(index)
-    rets = pd.DataFrame({t: close_by[t].pct_change(fill_method=None).fillna(0.0) for t in tickers}).reindex(index).fillna(0.0)
-    pos = pd.DataFrame({t: s3_by[t].reindex(index).fillna(0).astype(int) for t in tickers})
-    mom = pd.DataFrame({t: mom_by[t].reindex(index).fillna(-1e9) for t in tickers})
+    rets = pd.DataFrame({t: _ensure_series(close_by[t]).pct_change(fill_method=None).fillna(0.0) for t in tickers}).reindex(index).fillna(0.0)
+    pos = pd.DataFrame({t: _ensure_series(s3_by[t]).reindex(index).fillna(0).astype(int) for t in tickers})
+    mom = pd.DataFrame({t: _ensure_series(mom_by[t]).reindex(index).fillna(-1e9) for t in tickers})
     weights = pd.DataFrame(0.0, index=index, columns=tickers)
     rdates = _rebalance_dates(index, cadence)
     core = [t for t in ["SPY","QQQ"] if t in tickers]
@@ -252,6 +269,7 @@ def portfolio_momo_topk_overlay(index: pd.DatetimeIndex,
     port_rets = (weights * pos * rets).sum(axis=1)
     eq = initial * (1.0 + port_rets).cumprod()
     eq.iloc[0] = initial
+    eq.name = f"MomoTopK_{breadth_min}to{breadth_max}_{cadence}"
     return eq
 
 # ---------- Reporting ----------
@@ -260,7 +278,7 @@ def compute_all(cfg: Config):
     index, close_by, s3_by, mom_by = build_universe(cfg.tickers, cfg.overall_start, cfg.overall_end)
     windows = build_windows(index, cfg.equal_slices, cfg.include_rolling_3y, cfg.rolling_step_years)
 
-    ew_bh_rets = pd.DataFrame({t: close_by[t].pct_change(fill_method=None).fillna(0.0) for t in cfg.tickers}).reindex(index).fillna(0.0)
+    ew_bh_rets = pd.DataFrame({t: _ensure_series(close_by[t]).pct_change(fill_method=None).fillna(0.0) for t in cfg.tickers}).reindex(index).fillna(0.0)
     ew_w = 1.0 / len(cfg.tickers) if len(cfg.tickers) > 0 else 0.0
     ew_bh_eq = cfg.initial_capital * (1.0 + (ew_bh_rets * ew_w).sum(axis=1)).cumprod()
     ew_bh_eq.iloc[0] = cfg.initial_capital
@@ -439,10 +457,8 @@ def write_workbook(cfg: Config,
         for name, df in sheets.items():
             ws = writer.sheets[name]
             ws.freeze_panes(1, 1)
-            # set widths
             for col_idx, col in enumerate(df.columns):
                 ws.set_column(col_idx, col_idx, max(12, len(str(col)) + 2))
-            # light formats
             for col_idx, col in enumerate(df.columns):
                 label = str(col).lower()
                 if "sharpe" in label:
@@ -456,7 +472,7 @@ def load_yaml(path: str) -> dict:
         return yaml.safe_load(f)
 
 def main(argv=None):
-    import argparse, sys
+    import argparse
     ap = argparse.ArgumentParser(description="MA S3 Momentum Overlay with variable breadth and EQ SPY QQQ baseline")
     ap.add_argument("--config", type=str, required=True)
     args = ap.parse_args(argv)
