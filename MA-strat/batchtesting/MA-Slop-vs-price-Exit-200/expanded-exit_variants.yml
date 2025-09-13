@@ -1,0 +1,57 @@
+
+# Exit variants using the same SMA 200 slope up entry
+# Save as exit_variants.yml
+# Run with:
+#   python ma_exit_variants_report.py --config exit_variants.yml
+
+universe_label: "SP500-Sector-ExitTest"
+tickers: ["QQQ", "SPY", "MSFT", "PFE", "JPM", "HD", "KO", "GE", "XOM", "SO", "DOW", "AMT", "T", "INTC", "ORCL", "JNJ","ABT","BAC","WFC","MCD","DIS","PG","WMT","BA","CAT","CVX", "DUK","DD","VZ"]
+
+overall:
+  start: "2001-01-01"
+  end: "2025-09-01"
+
+windows:
+  equal_slices: 10
+  include_rolling_3y: true
+  rolling_step_years: 1
+
+common:
+  initial_capital: 100000
+  slippage_pct: 0.0
+  fee_per_trade: 0.0
+  min_data_fraction: 0.8
+
+strategies:
+  # S2 unchanged, exit when price is below SMA 200
+  - name: "S2_Entry200SlopeUp_ExitPriceBelow200"
+    ma_type: "sma"
+    ma_len: 200
+    ma_len_price: 200
+    ma_len_slope: 200
+    exit_rule: "price_below"
+    entry_confirm_bars: 1
+    exit_confirm_bars: 1
+
+  # S1 replaced, exit when SMA 200 slope turns down
+  - name: "S1_Entry200SlopeUp_ExitSlopeDown200"
+    ma_type: "sma"
+    ma_len: 200
+    ma_len_price: 200
+    ma_len_slope: 200
+    exit_rule: "slope_down"
+    entry_confirm_bars: 1
+    exit_confirm_bars: 1
+
+  # S3 replaced, exit on first of price below SMA 200 or SMA 200 slope down
+  - name: "S3_Entry200SlopeUp_ExitPriceBelowORslopeDown200"
+    ma_type: "sma"
+    ma_len: 200
+    ma_len_price: 200
+    ma_len_slope: 200
+    exit_rule: "price_below_or_slope_down"
+    entry_confirm_bars: 1
+    exit_confirm_bars: 1
+
+output:
+  workbook_path: "SP500-Sector-ExitTest-Expanded-Uni-Report.xlsx"
