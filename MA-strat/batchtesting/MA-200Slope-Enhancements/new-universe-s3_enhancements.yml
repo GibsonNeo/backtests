@@ -1,0 +1,109 @@
+
+# S3 enhancements, baseline S3 moved to S1, plus six variants
+# Save as s3_enhancements.yml
+# Run with:
+#   python ma_s3_enhancements_report.py --config s3_enhancements.yml
+
+universe_label: "SP500-Sector-S3-Enhancements"
+tickers: ["QQQ", "SPY", "MSFT", "PFE", "JPM", "HD", "KO", "GE", "XOM", "SO", "DOW", "AMT", "T"]
+
+overall:
+  start: "2001-01-01"
+  end: "2025-09-01"
+
+windows:
+  equal_slices: 10
+  include_rolling_3y: true
+  rolling_step_years: 1
+
+common:
+  initial_capital: 100000
+  slippage_pct: 0.0
+  fee_per_trade: 0.0
+  min_data_fraction: 0.8
+
+strategies:
+  # S1 baseline, S3 moved here, entry slope up on 200, exit first of price below 200 or slope down on 200
+  - name: "S1_S3_Baseline"
+    ma_type: "sma"
+    ma_len: 200
+    ma_len_price: 200
+    ma_len_slope: 200
+    entry_confirm_bars: 1
+    exit_confirm_bars: 1
+
+  # S2, percent band, treat tiny crosses as noise, band 0.5 percent, require band on entry as well
+  - name: "S2_S3_with_0p5pct_band"
+    ma_type: "sma"
+    ma_len: 200
+    ma_len_price: 200
+    ma_len_slope: 200
+    percent_band_pct: 0.005
+    band_on_entry: true
+    entry_confirm_bars: 1
+    exit_confirm_bars: 1
+
+  # S3, slope magnitude, require at least 0.2 percent rise over ten days on SMA 200 for entry, exit on 0.2 percent fall or price break
+  - name: "S3_S3_with_slope_magnitude_0p2pct_over_10"
+    ma_type: "sma"
+    ma_len: 200
+    ma_len_price: 200
+    ma_len_slope: 200
+    slope_mag_days: 10
+    slope_mag_thresh: 0.002
+    entry_confirm_bars: 1
+    exit_confirm_bars: 1
+
+  # S4, weekly signal evaluation, compute signals on Friday Close and carry for the next week
+  - name: "S4_S3_weekly_signals_daily_exec"
+    ma_type: "sma"
+    ma_len: 200
+    ma_len_price: 200
+    ma_len_slope: 200
+    weekly_signals: true
+    entry_confirm_bars: 1
+    exit_confirm_bars: 1
+
+  # S5, cooldown after exit, require three bars before new entry
+  - name: "S5_S3_cooldown_3bars_after_exit"
+    ma_type: "sma"
+    ma_len: 200
+    ma_len_price: 200
+    ma_len_slope: 200
+    cooldown_bars: 3
+    entry_confirm_bars: 1
+    exit_confirm_bars: 1
+
+  # S6, market gate using SPY, only enter when SPY Close is above its own SMA 200
+  - name: "S6_S3_gate_SPY_above_SMA200"
+    ma_type: "sma"
+    ma_len: 200
+    ma_len_price: 200
+    ma_len_slope: 200
+    market_gate: "spy_above_sma200"
+    entry_confirm_bars: 1
+    exit_confirm_bars: 1
+
+  # S7, volatility throttle, block entries when vol20 is in the top decile
+  - name: "S7_S3_vol_throttle_top_decile_blocked"
+    ma_type: "sma"
+    ma_len: 200
+    ma_len_price: 200
+    ma_len_slope: 200
+    vol_lookback: 20
+    vol_percentile: 0.9
+    entry_confirm_bars: 1
+    exit_confirm_bars: 1
+
+  # S8, ensemble slope vote, require both SMA 200 and SMA 100 slopes up for entry, exit remains baseline
+  - name: "S8_S3_ensemble_vote_200_and_100_slopes"
+    ma_type: "sma"
+    ma_len: 200
+    ma_len_price: 200
+    ma_len_slope: 200
+    ensemble_slope_hundred: true
+    entry_confirm_bars: 1
+    exit_confirm_bars: 1
+
+output:
+  workbook_path: "SP500-Sector-S3-Enhancements-Report.xlsx"

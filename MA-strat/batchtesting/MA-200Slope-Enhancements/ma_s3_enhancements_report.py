@@ -1,22 +1,13 @@
 
 #!/usr/bin/env python3
 """
-MA multi-window portfolio report
-Builds a single Excel workbook that compares S1, S2, S3 across a list of tickers
-Windows include ten equal slices across the overall period, the full period window,
-and optional rolling three year windows stepping yearly.
-Market regime tagging uses SPY inside each window.
-Applies apples to apples Close-based logic for MA, signals, and buy and hold.
-Cash earns zero return when out of market.
-No trade ledger is written, only trade count summaries.
-
-Usage
-  pip install pandas numpy yfinance xlsxwriter pyyaml
-  python ma_multi_window_report.py --config batch_backtest.yml
-
-Config notes
-  See the generated batch_backtest.yml written next to this script.
-  Strategies S1, S2, S3 are prefilled to match your ask.
+S3 enhancements report
+Baseline S3 moved to S1
+All strategies share entry on SMA 200 slope up
+Baseline exit is first of price below SMA 200 or SMA 200 slope down
+Enhancements add, small percent bands, slope magnitude threshold, weekly signal evaluation, cooldown days, market level gate with SPY, volatility throttle, ensemble slope vote
+Signals use Close only, buy and hold uses Close, start flat per window, force close on last bar
+Portfolio uses equal weight across active names each day
 """
 
 from __future__ import annotations
@@ -40,7 +31,7 @@ except Exception:
     yaml = None
 
 
-# ========== Core helpers ==========
+# ---------- helpers ----------
 
 def _ema(series: pd.Series, length: int) -> pd.Series:
     return series.ewm(span=length, adjust=False, min_periods=length).mean()
@@ -61,7 +52,7 @@ def _ma(series: pd.Series, length: int, ma_type: str) -> pd.Series:
 
 
 def _confirm(seq: pd.Series, bars: int) -> pd.Series:
-    if bars <= 1:
+    if bars is None or bars <= 1:
         return seq.fillna(False).astype("boolean")
     out = seq.rolling(window=bars, min_periods=bars).sum() == bars
     return out.astype("boolean")
@@ -115,7 +106,7 @@ def _normalize_ohlcv(data: pd.DataFrame, ticker: Optional[str]) -> pd.DataFrame:
 
 def load_data(ticker: str, start: Optional[str], end: Optional[str]) -> pd.DataFrame:
     if yf is None:
-        raise RuntimeError("yfinance is not available. Install it or modify the script to point to local CSVs.")
+        raise RuntimeError("yfinance is not available. Install it or modify the script to pull from CSVs.")
     raw = yf.download(ticker, start=start, end=end, auto_adjust=False, progress=False)
     if raw.empty:
         raise RuntimeError(f"No data returned from yfinance for {ticker}")
@@ -124,7 +115,7 @@ def load_data(ticker: str, start: Optional[str], end: Optional[str]) -> pd.DataF
     return df
 
 
-# ========== Strategy and backtest ==========
+# ---------- backtest core ----------
 
 @dataclass
 class StratParams:
@@ -132,11 +123,21 @@ class StratParams:
     ma_type: str = "sma"
     ma_len: int = 200
     ma_len_price: Optional[int] = 200
-    ma_len_slope: Optional[int] = 20    # S1 default is 20
-    entry_rule: str = "slope_up"        # slope_up or price_above
-    exit_rule: str = "price_below"      # slope_down or price_below
-    entry_confirm_bars: int = 1
-    exit_confirm_bars: int = 1
+    ma_len_slope: Optional[int] = 200
+    entry_confirm_bars: Optional[int] = 1
+    exit_confirm_bars: Optional[int] = 1
+
+    # Variant switches
+    percent_band_pct: Optional[float] = None          # e.g. 0.005 for 0.5 percent
+    band_on_entry: bool = True                        # require price above MA by band on entry
+    slope_mag_days: Optional[int] = None              # e.g. 10
+    slope_mag_thresh: Optional[float] = None          # e.g. 0.002 for 0.2 percent
+    weekly_signals: bool = False                      # evaluate signals on Friday Close and carry for a week
+    cooldown_bars: int = 0                            # require N bars after exit before new entry
+    market_gate: Optional[str] = None                 # "spy_above_sma200" or "spy_in_s3"
+    vol_lookback: Optional[int] = None                # e.g. 20
+    vol_percentile: Optional[float] = None            # e.g. 0.9 blocks top decile of vol for entries
+    ensemble_slope_hundred: bool = False              # require SMA 100 slope up as well for entry
 
 
 @dataclass
@@ -146,57 +147,116 @@ class RunParams:
     initial_capital: float = 100000.0
     slippage_pct: float = 0.0
     fee_per_trade: float = 0.0
-    min_data_fraction: float = 0.8      # require this fraction of trading days to be present per window per ticker
+    min_data_fraction: float = 0.8
 
 
-def build_rules(price: pd.Series, p: StratParams):
+def build_daily_signals(price: pd.Series, p: StratParams) -> Tuple[pd.Series, pd.Series, pd.DataFrame]:
+    # moving averages
     len_price = p.ma_len_price if p.ma_len_price is not None else p.ma_len
     len_slope = p.ma_len_slope if p.ma_len_slope is not None else p.ma_len
 
     ma_price = _ma(price, len_price, p.ma_type)
     ma_slope = _ma(price, len_slope, p.ma_type)
+    ma_100 = _ma(price, 100, p.ma_type) if p.ensemble_slope_hundred else None
 
-    # apples to apples, strict greater for above, strict less for below unless you change allow equal
+    # base relations
     above = price > ma_price
     below = price < ma_price
     slope_up = ma_slope > ma_slope.shift(1)
     slope_down = ma_slope < ma_slope.shift(1)
+    slope_up_100 = ma_100 > ma_100.shift(1) if ma_100 is not None else None
 
-    if p.entry_rule == "slope_up":
-        entry_raw = slope_up
-    elif p.entry_rule == "price_above":
-        entry_raw = above
-    else:
-        raise ValueError("entry_rule must be slope_up or price_above")
+    # percent band logic
+    if p.percent_band_pct is not None and p.percent_band_pct > 0:
+        band = p.percent_band_pct
+        above = price > (ma_price * (1.0 + band))
+        below = price < (ma_price * (1.0 - band))
 
-    if p.exit_rule == "slope_down":
-        exit_raw = slope_down
-    elif p.exit_rule == "price_below":
-        exit_raw = below
-    else:
-        raise ValueError("exit_rule must be slope_down or price_below")
+    # slope magnitude logic
+    mag_up_ok = None
+    mag_down_ok = None
+    if p.slope_mag_days and p.slope_mag_thresh is not None:
+        change = ma_slope.pct_change(p.slope_mag_days)
+        mag_up_ok = change >= float(p.slope_mag_thresh)
+        mag_down_ok = change <= float(-p.slope_mag_thresh)
 
-    entry_ready = _confirm(entry_raw, p.entry_confirm_bars)
-    exit_ready = _confirm(exit_raw, p.exit_confirm_bars)
+    # entry rule base, slope up on 200
+    entry_raw = slope_up
+    # entry band requirement
+    if p.percent_band_pct is not None and p.percent_band_pct > 0 and p.band_on_entry:
+        entry_raw = entry_raw & above
+    # entry slope magnitude
+    if mag_up_ok is not None:
+        entry_raw = entry_raw & mag_up_ok
+    # ensemble slope vote
+    if p.ensemble_slope_hundred and slope_up_100 is not None:
+        entry_raw = entry_raw & slope_up_100
+
+    # exit rule, baseline first of price below or slope down
+    exit_raw = below | slope_down
+    # slope magnitude exit override
+    if mag_down_ok is not None and p.slope_mag_days and p.slope_mag_thresh is not None:
+        # for the slope magnitude variant we require magnitude on exit as well
+        exit_raw = mag_down_ok | below  # allow price break to also exit
+
+    entry_ready = _confirm(entry_raw, p.entry_confirm_bars or 1)
+    exit_ready = _confirm(exit_raw, p.exit_confirm_bars or 1)
 
     ctx = pd.DataFrame(index=price.index)
     ctx["MA_price"] = ma_price
     ctx["MA_slope"] = ma_slope
-    ctx["price_above_MAprice"] = above
-    ctx["price_below_MAprice"] = below
-    ctx["slope_up_MAslope"] = slope_up
-    ctx["slope_down_MAslope"] = slope_down
+    if ma_100 is not None:
+        ctx["MA_100"] = ma_100
+    ctx["price_above"] = above
+    ctx["price_below"] = below
+    ctx["slope_up"] = slope_up
+    ctx["slope_down"] = slope_down
     ctx["entry_ready"] = entry_ready
     ctx["exit_ready"] = exit_ready
+    if mag_up_ok is not None:
+        ctx["slope_mag_up_ok"] = mag_up_ok
+    if mag_down_ok is not None:
+        ctx["slope_mag_down_ok"] = mag_down_ok
+
     return entry_ready, exit_ready, ctx
 
 
-def backtest_one(df: pd.DataFrame, p: StratParams, run: RunParams) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Return equity DataFrame, trades DataFrame, and context DataFrame for the full data period."""
-    price = pd.to_numeric(df["Close"], errors="coerce")
-    entry_ready, exit_ready, ctx = build_rules(price, p)
+def apply_weekly_mode(sig: pd.Series) -> pd.Series:
+    weekly = sig.resample("W-FRI").last()
+    expanded = weekly.reindex(sig.index).ffill()
+    return expanded.astype("boolean")
 
-    # act at next open
+
+def backtest_one(
+    df: pd.DataFrame,
+    p: StratParams,
+    run: RunParams,
+    spy_ctx: Optional[Dict[str, pd.Series]] = None,
+    vol_gate_series: Optional[pd.Series] = None
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+
+    price = pd.to_numeric(df["Close"], errors="coerce")
+    entry_ready, exit_ready, ctx = build_daily_signals(price, p)
+
+    # weekly signal evaluation if asked
+    if p.weekly_signals:
+        entry_ready = apply_weekly_mode(entry_ready)
+        exit_ready = apply_weekly_mode(exit_ready)
+
+    # market gate
+    if p.market_gate and spy_ctx is not None:
+        if p.market_gate == "spy_above_sma200":
+            gate = spy_ctx["spy_above_sma200"].reindex(entry_ready.index).fillna(False)
+            entry_ready = (entry_ready & gate).astype("boolean")
+        elif p.market_gate == "spy_in_s3":
+            gate = spy_ctx["spy_in_s3"].reindex(entry_ready.index).fillna(False)
+            entry_ready = (entry_ready & gate).astype("boolean")
+
+    # volatility throttle, block entries on high vol days
+    if p.vol_lookback and p.vol_percentile is not None and vol_gate_series is not None:
+        gate = vol_gate_series.reindex(entry_ready.index).fillna(False)
+        entry_ready = (entry_ready & gate).astype("boolean")
+
     entry_arr = entry_ready.shift(1).astype("boolean").fillna(False).to_numpy(dtype=bool).reshape(-1)
     exit_arr  = exit_ready.shift(1).astype("boolean").fillna(False).to_numpy(dtype=bool).reshape(-1)
 
@@ -205,13 +265,17 @@ def backtest_one(df: pd.DataFrame, p: StratParams, run: RunParams) -> Tuple[pd.D
     idx = df.index.to_numpy()
 
     in_pos = False
+    cooldown = 0
     trades = []
     entry_idx = None
 
     for i in range(len(idx)):
         if (not in_pos) and entry_arr[i]:
-            entry_idx = i
-            in_pos = True
+            if cooldown > 0:
+                cooldown -= 1
+            else:
+                entry_idx = i
+                in_pos = True
         elif in_pos and exit_arr[i]:
             e_i = entry_idx
             x_i = i
@@ -228,6 +292,7 @@ def backtest_one(df: pd.DataFrame, p: StratParams, run: RunParams) -> Tuple[pd.D
             })
             in_pos = False
             entry_idx = None
+            cooldown = int(p.cooldown_bars or 0)
 
     if in_pos and entry_idx is not None:
         e_i = entry_idx
@@ -252,7 +317,8 @@ def backtest_one(df: pd.DataFrame, p: StratParams, run: RunParams) -> Tuple[pd.D
         if end > start:
             position.iloc[start:end] = 1.0
 
-    strat_ret = position.shift(1).fillna(0.0) * ret_close  # act at next open
+    strat_ret = position.shift(1).fillna(0.0) * ret_close
+
     equity = pd.DataFrame(index=df.index)
     equity["position"] = position
     equity["ret_close"] = ret_close
@@ -263,7 +329,6 @@ def backtest_one(df: pd.DataFrame, p: StratParams, run: RunParams) -> Tuple[pd.D
     if not trades_df.empty:
         trades_df["pnl"] = trades_df["ret_pct"] * run.initial_capital
 
-    ctx = ctx  # already built
     return equity, trades_df, ctx
 
 
@@ -284,7 +349,7 @@ def metrics(equity: pd.Series) -> dict:
     roll_max = eq.cummax()
     ddown = (eq / roll_max) - 1.0
     max_dd = float(ddown.min())
-    exposure = float((rets != 0).mean())
+    exposure = float(rets.ne(0.0).mean())
     return {
         "start_value": start_val,
         "end_value": end_val,
@@ -298,7 +363,6 @@ def metrics(equity: pd.Series) -> dict:
 
 
 def buy_and_hold_close(df: pd.DataFrame, initial_capital: float) -> pd.Series:
-    """Buy at first Close and hold, apples to apples on Close only."""
     close = pd.to_numeric(df["Close"], errors="coerce")
     if close.empty or close.iloc[0] <= 0:
         return pd.Series(dtype=float)
@@ -307,11 +371,7 @@ def buy_and_hold_close(df: pd.DataFrame, initial_capital: float) -> pd.Series:
     return eq
 
 
-# ========== Windows ==========
-
-def _window_from_bounds(index: pd.DatetimeIndex, start: pd.Timestamp, end: pd.Timestamp) -> pd.DatetimeIndex:
-    return index[(index >= start) & (index <= end)]
-
+# ---------- windows ----------
 
 def build_equal_slices(index: pd.DatetimeIndex, n_slices: int) -> List[Tuple[pd.Timestamp, pd.Timestamp, str]]:
     if n_slices <= 0:
@@ -319,7 +379,6 @@ def build_equal_slices(index: pd.DatetimeIndex, n_slices: int) -> List[Tuple[pd.
     dates = index.sort_values()
     start = dates[0]
     end = dates[-1]
-    # create boundaries linearly in time then snap to nearest trading day
     total_days = (end - start).days
     bounds = [start + pd.Timedelta(days=int(round(i * total_days / n_slices))) for i in range(n_slices)]
     bounds.append(end)
@@ -346,7 +405,6 @@ def build_rolling_3y(index: pd.DatetimeIndex, step_years: int = 1) -> List[Tuple
     for y in range(first_y, last_y - 2, step_years):
         s_raw = pd.Timestamp(year=y, month=1, day=1)
         e_raw = s_raw + pd.DateOffset(years=3) - pd.Timedelta(days=1)
-        # snap to available days
         s = dates[dates >= s_raw]
         e = dates[dates <= e_raw]
         if len(s) == 0 or len(e) == 0:
@@ -354,26 +412,20 @@ def build_rolling_3y(index: pd.DatetimeIndex, step_years: int = 1) -> List[Tuple
         s = s[0]
         e = e[-1]
         win = dates[(dates >= s) & (dates <= e)]
-        if len(win) >= 252:  # about one year minimum
+        if len(win) >= 252:
             windows.append((s, e, f"R{y}"))
     return windows
 
 
-# ========== Portfolio ==========
+# ---------- portfolio ----------
 
 def portfolio_equality_active(rets_by_ticker: Dict[str, pd.Series], pos_by_ticker: Dict[str, pd.Series], index: pd.DatetimeIndex) -> pd.Series:
-    """Equal weight across active names, weights sum to one when any active exists, zero when none active."""
-    # Align all series to the shared index
     aligned_rets = {t: rets.reindex(index).fillna(0.0) for t, rets in rets_by_ticker.items()}
     aligned_pos  = {t: pos.reindex(index).fillna(0.0) for t, pos in pos_by_ticker.items()}
-    # position used for returns is position.shift(1) in individual strategy. Here, pos already corresponds to non-shifted indicator.
-    # We will create active mask that matches the return timing by using the same shift
     active_mask = {t: (aligned_pos[t].shift(1).fillna(0.0) > 0.0).astype(float) for t in aligned_pos.keys()}
-    # count actives per day
     actives_df = pd.DataFrame(active_mask)
     k = actives_df.sum(axis=1)
-    weights = actives_df.div(k.replace(0.0, np.nan), axis=0).fillna(0.0)  # each active gets 1/k, otherwise zero
-    # combine returns
+    weights = actives_df.div(k.replace(0.0, np.nan), axis=0).fillna(0.0)
     rets_df = pd.DataFrame(aligned_rets).fillna(0.0)
     port_ret = (weights * rets_df).sum(axis=1)
     port_ret.name = "portfolio_ret"
@@ -381,7 +433,6 @@ def portfolio_equality_active(rets_by_ticker: Dict[str, pd.Series], pos_by_ticke
 
 
 def equal_weight_buy_hold(rets_by_ticker: Dict[str, pd.Series], index: pd.DatetimeIndex, initial_capital: float) -> pd.Series:
-    """Equal weight across all tickers, static weights, simple average of daily returns."""
     aligned = [s.reindex(index).fillna(0.0) for s in rets_by_ticker.values()]
     if not aligned:
         return pd.Series(dtype=float)
@@ -392,7 +443,7 @@ def equal_weight_buy_hold(rets_by_ticker: Dict[str, pd.Series], index: pd.Dateti
     return eq
 
 
-# ========== Regime tagging ==========
+# ---------- regimes ----------
 
 def max_drawdown_from_equity(eq: pd.Series) -> float:
     if eq.empty:
@@ -409,7 +460,6 @@ def tag_regime_spy(spy_df: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp,
     eq = buy_and_hold_close(w, initial_capital)
     ret = float(eq.iloc[-1] / eq.iloc[0] - 1.0)
     mdd = max_drawdown_from_equity(eq)
-    # rules you approved
     if ret > 0.0 and mdd > -0.15:
         return ("Bull", ret, mdd)
     if ret < 0.0 and mdd <= -0.20:
@@ -417,28 +467,24 @@ def tag_regime_spy(spy_df: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp,
     return ("Sideways", ret, mdd)
 
 
-# ========== Workbook writer ==========
+# ---------- workbook ----------
 
 def _auto_width_and_formats(writer: pd.ExcelWriter, sheet_name: str, df: pd.DataFrame):
     ws = writer.sheets[sheet_name]
     wb = writer.book
-    # formats
     pct = wb.add_format({'num_format': '0.00%'})
     ratio = wb.add_format({'num_format': '0.0000'})
     datefmt = wb.add_format({'num_format': 'yyyy-mm-dd'})
-    # freeze top row and first column
     ws.freeze_panes(1, 1)
-    # set widths
     for i, col in enumerate(df.columns):
         series = df[col]
-        max_len = max([len(str(col))] + [len(str(v)) for v in series.head(2000)])  # sample for speed
+        max_len = max([len(str(col))] + [len(str(v)) for v in series.head(2000)])
         max_len = min(max_len + 2, 48)
         ws.set_column(i, i, max_len)
-        # format by name heuristics
         name = str(col).lower()
         if "date" in name:
             ws.set_column(i, i, max_len, datefmt)
-        if "return" in name or "drawdown" in name or "cagr" in name or "fraction" in name:
+        if "return" in name or "drawdown" in name or "cagr" in name or "fraction" in name or "excess" in name:
             ws.set_column(i, i, max_len, pct)
         if "sharpe" in name or "sortino" in name or "vol_annual" in name:
             ws.set_column(i, i, max_len, ratio)
@@ -449,11 +495,17 @@ def build_workbook(
     summary_df: pd.DataFrame,
     windows_df: pd.DataFrame,
     per_ticker_df: pd.DataFrame,
-    portfolio_df: pd.DataFrame
+    portfolio_df: pd.DataFrame,
+    head_to_head_df: pd.DataFrame,
+    regime_winrates_df: pd.DataFrame,
+    summary_vs_base_df: pd.DataFrame,
 ):
     with pd.ExcelWriter(out_path, engine="xlsxwriter") as writer:
         summary_df.to_excel(writer, sheet_name="Summary", index=False)
         _auto_width_and_formats(writer, "Summary", summary_df)
+
+        summary_vs_base_df.to_excel(writer, sheet_name="SummaryPlus", index=False)
+        _auto_width_and_formats(writer, "SummaryPlus", summary_vs_base_df)
 
         windows_df.to_excel(writer, sheet_name="Windows", index=False)
         _auto_width_and_formats(writer, "Windows", windows_df)
@@ -464,8 +516,14 @@ def build_workbook(
         portfolio_df.to_excel(writer, sheet_name="Portfolio", index=False)
         _auto_width_and_formats(writer, "Portfolio", portfolio_df)
 
+        head_to_head_df.to_excel(writer, sheet_name="HeadToHead", index=False)
+        _auto_width_and_formats(writer, "HeadToHead", head_to_head_df)
 
-# ========== Orchestrator ==========
+        regime_winrates_df.to_excel(writer, sheet_name="Regime_WinRates", index=False)
+        _auto_width_and_formats(writer, "Regime_WinRates", regime_winrates_df)
+
+
+# ---------- orchestrator ----------
 
 def compute_all(
     universe_label: str,
@@ -475,17 +533,38 @@ def compute_all(
     include_rolling_3y: bool,
     equal_slice_count: int,
     rolling_step_years: int
-) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    # fetch once
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+
     data_by_ticker: Dict[str, pd.DataFrame] = {}
     for t in sorted(set(tickers + ["SPY"])):
         data_by_ticker[t] = load_data(t, run_params.start_date, run_params.end_date)
 
-    # shared trading calendar from SPY
     spy = data_by_ticker["SPY"]
     shared_index = spy.index
 
-    # windows
+    # pre compute spy context for market gates and S3 state
+    spy_ma200 = _ma(pd.to_numeric(spy["Close"], errors="coerce"), 200, "sma")
+    spy_above = pd.to_numeric(spy["Close"], errors="coerce") > spy_ma200
+    spy_slope_up = spy_ma200 > spy_ma200.shift(1)
+    spy_slope_down = spy_ma200 < spy_ma200.shift(1)
+    spy_exit = spy_above == False | spy_slope_down
+    spy_entry = spy_slope_up
+    spy_entry_ready = _confirm(spy_entry, 1)
+    spy_exit_ready = _confirm(spy_exit, 1)
+    spy_in_s3 = pd.Series(False, index=spy.index)
+    state = False
+    for i, ts in enumerate(spy.index):
+        if (not state) and bool(spy_entry_ready.iloc[i]):
+            state = True
+        elif state and bool(spy_exit_ready.iloc[i]):
+            state = False
+        spy_in_s3.iloc[i] = state
+
+    spy_ctx_full = {
+        "spy_above_sma200": spy_above.astype("boolean"),
+        "spy_in_s3": spy_in_s3.astype("boolean"),
+    }
+
     windows: List[Tuple[pd.Timestamp, pd.Timestamp, str]] = []
     windows.extend(build_full_window(shared_index))
     if equal_slice_count and equal_slice_count > 0:
@@ -507,51 +586,50 @@ def compute_all(
         })
     windows_df = pd.DataFrame(windows_df_rows)
 
-    # precompute per ticker per strategy across the full range once
-    per_ticker_full: Dict[Tuple[str, str], Dict[str, pd.DataFrame]] = {}
-    for strat in strategies:
-        for t in tickers:
-            df = data_by_ticker[t]
-            eq, trades_df, ctx = backtest_one(df, strat, run_params)
-            per_ticker_full[(strat.name, t)] = {
-                "equity": eq,
-                "trades": trades_df,
-                "ctx": ctx,
-                "df": df,
-            }
-
-    # build result tables
     per_ticker_rows = []
     portfolio_rows = []
 
-    # helper for window slice
-    def slice_index(df: pd.DataFrame, s: pd.Timestamp, e: pd.Timestamp) -> pd.DataFrame:
-        return df[(df.index >= s) & (df.index <= e)]
-
-    # per window work
     for s, e, wid in windows:
-        # per ticker metrics and trade summary
+        spy_len = len(spy[(spy.index >= s) & (spy.index <= e)])
+        if spy_len == 0:
+            continue
+
+        spy_ctx = {k: v[(v.index >= s) & (v.index <= e)] for k, v in spy_ctx_full.items()}
+
         for strat in strategies:
             for t in tickers:
-                full = per_ticker_full[(strat.name, t)]
-                eq_w = slice_index(full["equity"], s, e)
-                df_w = slice_index(full["df"], s, e)
-                # data sanity
+                df_full = data_by_ticker[t]
+                df_w = df_full[(df_full.index >= s) & (df_full.index <= e)]
                 if len(df_w) < 10:
                     continue
-                frac = len(eq_w) / len(slice_index(data_by_ticker["SPY"], s, e))
-                if frac < run_params.min_data_fraction:
+                if len(df_w) / spy_len < run_params.min_data_fraction:
                     continue
-                # compute metrics
+
+                # volatility throttle gate per window
+                vol_gate_series = None
+                if strat.vol_lookback and strat.vol_percentile is not None:
+                    close = pd.to_numeric(df_w["Close"], errors="coerce")
+                    rets = close.pct_change()
+                    vol = rets.rolling(int(strat.vol_lookback)).std()
+                    cutoff = vol.quantile(float(strat.vol_percentile))
+                    # allow entries when vol is at or below cutoff
+                    vol_gate_series = (vol <= cutoff).astype("boolean")
+
+                eq_w, trades_w, ctx_w = backtest_one(
+                    df_w, strat, run_params,
+                    spy_ctx=spy_ctx if strat.market_gate else None,
+                    vol_gate_series=vol_gate_series
+                )
+
                 m = metrics(eq_w["equity"])
-                # buy and hold metrics close only
                 bh_eq = buy_and_hold_close(df_w, run_params.initial_capital)
                 m_bh = metrics(bh_eq)
-                # trade summary via position flips
+
                 pos = eq_w["position"].fillna(0.0)
                 entries = int(((pos > 0.0) & (pos.shift(1).fillna(0.0) == 0.0)).sum())
                 exits = int(((pos == 0.0) & (pos.shift(1).fillna(0.0) > 0.0)).sum())
                 hold_bars = int((pos > 0.0).sum())
+
                 per_ticker_rows.append({
                     "window_id": wid,
                     "start": s.date().isoformat(),
@@ -565,33 +643,43 @@ def compute_all(
                     **{f"bh_{k}": v for k, v in m_bh.items()},
                     "beat_bh_sharpe": (m.get("sharpe", 0.0) > m_bh.get("sharpe", 0.0)),
                     "beat_bh_cagr": (m.get("cagr", 0.0) > m_bh.get("cagr", 0.0)),
+                    "beat_bh_mdd": (m.get("max_drawdown", -1.0) > m_bh.get("max_drawdown", -1.0)),
+                    "mdd_diff_vs_bh": float(m.get("max_drawdown", np.nan)) - float(m_bh.get("max_drawdown", np.nan)),
                 })
 
-        # portfolio per strategy for this window
         index_w = spy[(spy.index >= s) & (spy.index <= e)].index
-        # build rets and pos dicts for each strategy
         for strat in strategies:
             rets_by_ticker = {}
             pos_by_ticker = {}
             bh_rets_by_ticker = {}
+
             for t in tickers:
-                full = per_ticker_full[(strat.name, t)]
-                eq_full = full["equity"]
-                df_full = full["df"]
-                eq_w = eq_full.reindex(index_w).dropna(subset=["ret_close", "position"], how="all")
-                # data sanity per ticker inside window
+                df_full = data_by_ticker[t]
                 df_w = df_full[(df_full.index >= s) & (df_full.index <= e)]
                 if len(df_w) < 10:
                     continue
-                frac = len(eq_w) / len(index_w)
-                if frac < run_params.min_data_fraction:
+                if len(df_w) / spy_len < run_params.min_data_fraction:
                     continue
-                rets_by_ticker[t] = eq_w["ret_close"]
-                pos_by_ticker[t] = eq_w["position"]
-                # bh daily returns on Close
-                close = pd.to_numeric(df_full["Close"], errors="coerce").reindex(index_w).dropna()
-                bh_ret = close.pct_change().reindex(index_w).fillna(0.0)
-                bh_rets_by_ticker[t] = bh_ret
+
+                # recompute for portfolio alignment
+                vol_gate_series = None
+                if strat.vol_lookback and strat.vol_percentile is not None:
+                    close = pd.to_numeric(df_w["Close"], errors="coerce")
+                    rets = close.pct_change()
+                    vol = rets.rolling(int(strat.vol_lookback)).std()
+                    cutoff = vol.quantile(float(strat.vol_percentile))
+                    vol_gate_series = (vol <= cutoff).astype("boolean")
+
+                eq_w, trades_w, ctx_w = backtest_one(
+                    df_w, strat, run_params,
+                    spy_ctx=spy_ctx if strat.market_gate else None,
+                    vol_gate_series=vol_gate_series
+                )
+                rets_by_ticker[t] = eq_w["ret_close"].reindex(index_w).fillna(0.0)
+                pos_by_ticker[t] = eq_w["position"].reindex(index_w).fillna(0.0)
+
+                close_w = pd.to_numeric(df_w["Close"], errors="coerce").reindex(index_w)
+                bh_rets_by_ticker[t] = close_w.pct_change().fillna(0.0)
 
             if not rets_by_ticker:
                 continue
@@ -600,7 +688,6 @@ def compute_all(
             port_eq = run_params.initial_capital * (1.0 + port_ret).cumprod()
             port_m = metrics(port_eq)
 
-            # equal weight buy and hold baseline
             ew_bh_eq = equal_weight_buy_hold(bh_rets_by_ticker, index_w, run_params.initial_capital)
             ew_bh_m = metrics(ew_bh_eq)
 
@@ -613,62 +700,159 @@ def compute_all(
                 **{f"ew_bh_{k}": v for k, v in ew_bh_m.items()},
                 "beat_bh_sharpe": (port_m.get("sharpe", 0.0) > ew_bh_m.get("sharpe", 0.0)),
                 "beat_bh_cagr": (port_m.get("cagr", 0.0) > ew_bh_m.get("cagr", 0.0)),
+                "beat_bh_mdd": (port_m.get("max_drawdown", -1.0) > ew_bh_m.get("max_drawdown", -1.0)),
+                "mdd_diff_vs_bh": float(port_m.get("max_drawdown", np.nan)) - float(ew_bh_m.get("max_drawdown", np.nan)),
             })
 
     per_ticker_df = pd.DataFrame(per_ticker_rows)
     portfolio_df = pd.DataFrame(portfolio_rows)
 
-    # per window winners by Sharpe with tiebreakers: smaller max drawdown, then higher CAGR
+    # Winners by window
     winners = []
-    for wid, group in portfolio_df.groupby("window_id"):
-        # keep only rows with metrics
-        g = group.dropna(subset=["portfolio_sharpe"])
-        if g.empty:
-            continue
-        g = g.copy()
-        # sort by Sharpe desc, max_drawdown asc, CAGR desc
-        g["rank_key"] = list(zip(-g["portfolio_sharpe"], g["portfolio_max_drawdown"], -g["portfolio_cagr"]))
-        g = g.sort_values("rank_key")
-        best = g.iloc[0]
-        winners.append({"window_id": wid, "winner_strategy": best["strategy"]})
+    if not portfolio_df.empty:
+        g_all = portfolio_df.dropna(subset=["portfolio_sharpe"]).copy()
+        if not g_all.empty:
+            g_all["rank_key"] = list(zip(-g_all["portfolio_sharpe"], -g_all["portfolio_max_drawdown"], -g_all["portfolio_cagr"]))
+            for wid, group in g_all.groupby("window_id"):
+                gg = group.sort_values("rank_key")
+                best = gg.iloc[0]
+                winners.append({"window_id": wid, "winner_strategy": best["strategy"]})
     winners_df = pd.DataFrame(winners)
 
-    # summary across windows
-    # join winners to count wins and regime wins
-    windows_map = windows_df[["window_id", "regime"]]
+    windows_map = windows_df[["window_id","regime"]]
     port_join = portfolio_df.merge(winners_df, on="window_id", how="left").merge(windows_map, on="window_id", how="left")
 
+    # Summary
     summary_rows = []
     for strat in [s.name for s in strategies]:
-        g = port_join[port_join["strategy"] == strat]
+        g = port_join[port_join["strategy"] == strat].copy()
         if g.empty:
             continue
-        wins_total = int((g["winner_strategy"] == strat).sum())
-        wins_bull = int(((g["winner_strategy"] == strat) & (g["regime"] == "Bull")).sum())
-        wins_bear = int(((g["winner_strategy"] == strat) & (g["regime"] == "Bear")).sum())
-        wins_side = int(((g["winner_strategy"] == strat) & (g["regime"] == "Sideways")).sum())
+
+        beat_ew_bh_sharpe_pct = float(g["beat_bh_sharpe"].mean())
+        beat_ew_bh_cagr_pct   = float(g["beat_bh_cagr"].mean())
+        beat_ew_bh_mdd_pct    = float(g["beat_bh_mdd"].mean())
+        avg_excess_sharpe_vs_ew_bh = float((g["portfolio_sharpe"] - g["ew_bh_sharpe"]).mean())
+        avg_excess_cagr_vs_ew_bh   = float((g["portfolio_cagr"] - g["ew_bh_cagr"]).mean())
+        avg_mdd_diff_vs_ew_bh      = float(g["mdd_diff_vs_bh"].mean())
+        med_mdd_diff_vs_ew_bh      = float(g["mdd_diff_vs_bh"].median())
+
         summary_rows.append({
             "strategy": strat,
             "windows_evaluated": int(len(g)),
-            "wins_total": wins_total,
-            "wins_bull": wins_bull,
-            "wins_bear": wins_bear,
-            "wins_sideways": wins_side,
+            "wins_total": int((g["winner_strategy"] == strat).sum()),
+            "wins_bull": int(((g["winner_strategy"] == strat) & (g["regime"] == "Bull")).sum()),
+            "wins_bear": int(((g["winner_strategy"] == strat) & (g["regime"] == "Bear")).sum()),
+            "wins_sideways": int(((g["winner_strategy"] == strat) & (g["regime"] == "Sideways")).sum()),
             "avg_sharpe": float(g["portfolio_sharpe"].mean()),
             "avg_sortino": float(g["portfolio_sortino"].mean()),
             "median_max_drawdown": float(g["portfolio_max_drawdown"].median()),
             "avg_cagr": float(g["portfolio_cagr"].mean()),
-            "beat_bh_sharpe_pct": float(g["beat_bh_sharpe"].mean() if "beat_bh_sharpe" in g else 0.0),
-            "beat_bh_cagr_pct": float(g["beat_bh_cagr"].mean() if "beat_bh_cagr" in g else 0.0),
+            "beat_ew_bh_sharpe_pct": beat_ew_bh_sharpe_pct,
+            "beat_ew_bh_cagr_pct": beat_ew_bh_cagr_pct,
+            "beat_ew_bh_mdd_pct": beat_ew_bh_mdd_pct,
+            "avg_excess_sharpe_vs_ew_bh": avg_excess_sharpe_vs_ew_bh,
+            "avg_excess_cagr_vs_ew_bh": avg_excess_cagr_vs_ew_bh,
+            "avg_mdd_diff_vs_ew_bh": avg_mdd_diff_vs_ew_bh,
+            "median_mdd_diff_vs_ew_bh": med_mdd_diff_vs_ew_bh,
         })
     summary_df = pd.DataFrame(summary_rows).sort_values("wins_total", ascending=False)
 
-    return summary_df, windows_df, per_ticker_df, portfolio_df
+    # Head to head, win rates and average differences for all pairs
+    def head_to_head(df: pd.DataFrame, a: str, b: str) -> dict:
+        sub = df.pivot_table(index="window_id", columns="strategy",
+                             values=["portfolio_sharpe","portfolio_cagr","portfolio_max_drawdown"])
+        out = {"A": a, "B": b}
+        for metric in ["portfolio_sharpe","portfolio_cagr","portfolio_max_drawdown"]:
+            A = sub[(metric, a)]
+            B = sub[(metric, b)]
+            valid = A.notna() & B.notna()
+            A = A[valid]; B = B[valid]
+            if len(A) == 0:
+                win_pct = np.nan
+                avg_diff = np.nan
+            else:
+                win_pct = float((A > B).mean())
+                avg_diff = float((A - B).mean())
+            label = metric.replace("portfolio_", "")
+            out[f"{label}_win_pct_A_gt_B"] = win_pct
+            out[f"{label}_avg_diff_A_minus_B"] = avg_diff
+        return out
+
+    head_rows = []
+    names = [s.name for s in strategies]
+    for a in names:
+        for b in names:
+            if a == b:
+                continue
+            head_rows.append(head_to_head(portfolio_df, a, b))
+    head_to_head_df = pd.DataFrame(head_rows)
+
+    # Regime split win rates
+    def regime_pair(df: pd.DataFrame, a: str, b: str) -> List[dict]:
+        rows = []
+        for reg in ["Bull","Bear","Sideways"]:
+            sub = df[df["regime"] == reg].pivot_table(index="window_id", columns="strategy",
+                                                      values=["portfolio_sharpe","portfolio_max_drawdown"])
+            row = {"regime": reg, "A": a, "B": b}
+            for metric in ["portfolio_sharpe","portfolio_max_drawdown"]:
+                A = sub[(metric, a)]
+                B = sub[(metric, b)]
+                valid = A.notna() & B.notna()
+                A = A[valid]; B = B[valid]
+                win_pct = float((A > B).mean()) if len(A) else np.nan
+                label = metric.replace("portfolio_", "")
+                row[f"{label}_win_pct_A_gt_B"] = win_pct
+            rows.append(row)
+        return rows
+
+    regime_rows = []
+    port_join = portfolio_df.merge(windows_df[["window_id","regime"]], on="window_id", how="left")
+    for a in names:
+        for b in names:
+            if a == b:
+                continue
+            regime_rows.extend(regime_pair(port_join, a, b))
+    regime_winrates_df = pd.DataFrame(regime_rows)
+
+    # SummaryPlus versus baseline
+    base = names[0]  # S1 baseline is first in the list
+    base_df = portfolio_df[portfolio_df["strategy"] == base][["window_id","portfolio_sharpe","portfolio_cagr","portfolio_max_drawdown"]]
+    base_df = base_df.rename(columns={
+        "portfolio_sharpe": "base_sharpe",
+        "portfolio_cagr": "base_cagr",
+        "portfolio_max_drawdown": "base_mdd"
+    })
+    plus_rows = []
+    for strat in names:
+        g = portfolio_df[portfolio_df["strategy"] == strat][["window_id","portfolio_sharpe","portfolio_cagr","portfolio_max_drawdown"]].merge(base_df, on="window_id", how="inner")
+        if strat == base:
+            win_sharpe = np.nan; win_cagr = np.nan; better_mdd = np.nan
+            d_sh = np.nan; d_cg = np.nan; d_mdd = np.nan
+        else:
+            win_sharpe = float((g["portfolio_sharpe"] > g["base_sharpe"]).mean())
+            win_cagr = float((g["portfolio_cagr"] > g["base_cagr"]).mean())
+            better_mdd = float((g["portfolio_max_drawdown"] > g["base_mdd"]).mean())
+            d_sh = float((g["portfolio_sharpe"] - g["base_sharpe"]).mean())
+            d_cg = float((g["portfolio_cagr"] - g["base_cagr"]).mean())
+            d_mdd = float((g["portfolio_max_drawdown"] - g["base_mdd"]).mean())
+        plus_rows.append({
+            "strategy": strat,
+            "win_sharpe_vs_S1_pct": win_sharpe,
+            "win_cagr_vs_S1_pct": win_cagr,
+            "better_mdd_vs_S1_pct": better_mdd,
+            "avg_excess_sharpe_vs_S1": d_sh,
+            "avg_excess_cagr_vs_S1": d_cg,
+            "avg_mdd_diff_vs_S1": d_mdd,
+        })
+    summary_vs_base_df = summary_df.merge(pd.DataFrame(plus_rows), on="strategy", how="left")
+
+    return summary_df, windows_df, per_ticker_df, portfolio_df, head_to_head_df, regime_winrates_df, summary_vs_base_df
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="MA multi-window portfolio report")
-    ap.add_argument("--config", type=str, required=True, help="Path to YAML config, example batch_backtest.yml")
+    ap = argparse.ArgumentParser(description="S3 enhancements report")
+    ap.add_argument("--config", type=str, required=True, help="Path to YAML config, example s3_enhancements.yml")
     args = ap.parse_args(argv)
 
     if yaml is None:
@@ -694,7 +878,6 @@ def main(argv=None):
         min_data_fraction=float(common.get("min_data_fraction", 0.8)),
     )
 
-    # strategies, include S1, S2, S3
     strategies_cfg = cfg.get("strategies", [])
     strategies: List[StratParams] = []
     for s in strategies_cfg:
@@ -703,11 +886,19 @@ def main(argv=None):
             ma_type=str(s.get("ma_type", "sma")),
             ma_len=int(s.get("ma_len", 200)),
             ma_len_price=int(s.get("ma_len_price", 200)) if s.get("ma_len_price", None) is not None else None,
-            ma_len_slope=int(s.get("ma_len_slope", 20)) if s.get("ma_len_slope", None) is not None else None,
-            entry_rule=str(s.get("entry_rule", "slope_up")),
-            exit_rule=str(s.get("exit_rule", "price_below")),
-            entry_confirm_bars=int(s.get("entry_confirm_bars", 1)),
-            exit_confirm_bars=int(s.get("exit_confirm_bars", 1)),
+            ma_len_slope=int(s.get("ma_len_slope", 200)) if s.get("ma_len_slope", None) is not None else None,
+            entry_confirm_bars=int(s.get("entry_confirm_bars", 1)) if s.get("entry_confirm_bars", None) is not None else 1,
+            exit_confirm_bars=int(s.get("exit_confirm_bars", 1)) if s.get("exit_confirm_bars", None) is not None else 1,
+            percent_band_pct=float(s.get("percent_band_pct")) if s.get("percent_band_pct", None) is not None else None,
+            band_on_entry=bool(s.get("band_on_entry", True)),
+            slope_mag_days=int(s.get("slope_mag_days")) if s.get("slope_mag_days", None) is not None else None,
+            slope_mag_thresh=float(s.get("slope_mag_thresh")) if s.get("slope_mag_thresh", None) is not None else None,
+            weekly_signals=bool(s.get("weekly_signals", False)),
+            cooldown_bars=int(s.get("cooldown_bars", 0)),
+            market_gate=str(s.get("market_gate", None)) if s.get("market_gate", None) is not None else None,
+            vol_lookback=int(s.get("vol_lookback")) if s.get("vol_lookback", None) is not None else None,
+            vol_percentile=float(s.get("vol_percentile")) if s.get("vol_percentile", None) is not None else None,
+            ensemble_slope_hundred=bool(s.get("ensemble_slope_hundred", False)),
         ))
 
     windows_cfg = cfg.get("windows", {})
@@ -715,8 +906,7 @@ def main(argv=None):
     include_rolling_3y = bool(windows_cfg.get("include_rolling_3y", True))
     rolling_step_years = int(windows_cfg.get("rolling_step_years", 1))
 
-    # compute
-    summary_df, windows_df, per_ticker_df, portfolio_df = compute_all(
+    summary_df, windows_df, per_ticker_df, portfolio_df, head_to_head_df, regime_winrates_df, summary_vs_base_df = compute_all(
         universe_label=universe_label,
         tickers=tickers,
         run_params=run_params,
@@ -726,10 +916,10 @@ def main(argv=None):
         rolling_step_years=rolling_step_years
     )
 
-    # write workbook
     ts = pd.Timestamp.utcnow().strftime("%Y%m%d_%H%M%S")
-    out_path = cfg.get("output", {}).get("workbook_path", f"ma_report_{universe_label}_{ts}.xlsx")
-    build_workbook(out_path, summary_df, windows_df, per_ticker_df, portfolio_df)
+    out_path = cfg.get("output", {}).get("workbook_path", f"s3_enhancements_{universe_label}_{ts}.xlsx")
+    build_workbook(out_path, summary_df, windows_df, per_ticker_df, portfolio_df,
+                   head_to_head_df, regime_winrates_df, summary_vs_base_df)
     print(f"Wrote workbook to {out_path}")
 
 

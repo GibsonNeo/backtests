@@ -1,0 +1,67 @@
+
+# Exit confirmations using the same entry rule for all strategies
+# Save as exit_confirmations.yml
+# Run with:
+#   python ma_exit_confirmations_report.py --config exit_confirmations.yml
+
+universe_label: "SP500-Sector-ExitConfirms"
+tickers: ["QQQ", "SPY", "MSFT", "PFE", "JPM", "HD", "KO", "GE", "XOM", "SO", "DOW", "AMT", "T"]
+
+overall:
+  start: "2001-01-01"
+  end: "2025-09-01"
+
+windows:
+  equal_slices: 10
+  include_rolling_3y: true
+  rolling_step_years: 1
+
+common:
+  initial_capital: 100000
+  slippage_pct: 0.0
+  fee_per_trade: 0.0
+  min_data_fraction: 0.8
+
+strategies:
+  # S3 baseline, entry confirm 1, exit confirm 1
+  - name: "S3_Entry200SlopeUp_ExitPriceBelowORslopeDown200_ent1_ex1"
+    ma_type: "sma"
+    ma_len: 200
+    ma_len_price: 200
+    ma_len_slope: 200
+    exit_rule: "price_below_or_slope_down"
+    entry_confirm_bars: 1
+    exit_confirm_bars: 1
+
+  # S1, exit confirm 2
+  - name: "S1_Entry200SlopeUp_ExitPriceBelowORslopeDown200_ent1_ex2"
+    ma_type: "sma"
+    ma_len: 200
+    ma_len_price: 200
+    ma_len_slope: 200
+    exit_rule: "price_below_or_slope_down"
+    entry_confirm_bars: 1
+    exit_confirm_bars: 2
+
+  # S2, entry confirm 2
+  - name: "S2_Entry200SlopeUp_ExitPriceBelowORslopeDown200_ent2_ex1"
+    ma_type: "sma"
+    ma_len: 200
+    ma_len_price: 200
+    ma_len_slope: 200
+    exit_rule: "price_below_or_slope_down"
+    entry_confirm_bars: 2
+    exit_confirm_bars: 1
+
+  # S4, both entry and exit confirm 2
+  - name: "S4_Entry200SlopeUp_ExitPriceBelowORslopeDown200_ent2_ex2"
+    ma_type: "sma"
+    ma_len: 200
+    ma_len_price: 200
+    ma_len_slope: 200
+    exit_rule: "price_below_or_slope_down"
+    entry_confirm_bars: 2
+    exit_confirm_bars: 2
+
+output:
+  workbook_path: "SP500-Sector-ExitConfirms-Report.xlsx"

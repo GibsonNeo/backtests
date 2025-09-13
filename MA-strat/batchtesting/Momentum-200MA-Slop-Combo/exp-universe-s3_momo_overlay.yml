@@ -1,0 +1,47 @@
+
+# S3 baseline plus momentum overlay, save as s3_momo_overlay.yml
+# Run:
+#   python ma_s3_momo_overlay_report.py --config s3_momo_overlay.yml
+
+universe_label: "SP500-Sector-S3-MomoOverlay"
+tickers: ["QQQ", "SPY", "MSFT", "PFE", "JPM", "HD", "KO", "GE", "XOM", "SO", "DOW", "AMT", "T", "INTC", "ORCL", "JNJ","ABT","BAC","WFC","MCD","DIS","PG","WMT","BA","CAT","CVX", "DUK","DD","VZ"]
+
+overall:
+  start: "2001-01-01"
+  end: "2025-09-01"
+
+common:
+  initial_capital: 100000
+  min_data_fraction: 0.8
+
+strategies:
+  # S1, baseline, equal weight across active names each day
+  - name: "S1_S3_Baseline"
+    portfolio_mode: "equal_weight_active"
+
+  # S2, momentum overlay, weekly rebalances
+  - name: "S2_MomoTop5_with_SPY10_QQQ10_weekly"
+    portfolio_mode: "momo_overlay"
+    momo_freq: "W"
+    momo_top_k: 5
+
+  # S3, momentum overlay, monthly rebalances
+  - name: "S3_MomoTop5_with_SPY10_QQQ10_monthly"
+    portfolio_mode: "momo_overlay"
+    momo_freq: "M"
+    momo_top_k: 5
+
+  # S4, momentum overlay, quarterly rebalances
+  - name: "S4_MomoTop5_with_SPY10_QQQ10_quarterly"
+    portfolio_mode: "momo_overlay"
+    momo_freq: "Q"
+    momo_top_k: 5
+
+  # S5, momentum overlay, semiannual rebalances
+  - name: "S5_MomoTop5_with_SPY10_QQQ10_semiannual"
+    portfolio_mode: "momo_overlay"
+    momo_freq: "6M"
+    momo_top_k: 5
+
+output:
+  workbook_path: "SP500-Sector-S3-MomoOverlay-Report.xlsx"

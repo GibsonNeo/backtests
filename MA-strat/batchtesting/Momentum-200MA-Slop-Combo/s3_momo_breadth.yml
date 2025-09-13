@@ -1,0 +1,28 @@
+# Variable breadth momentum overlay on S3, plus new SPY QQQ fifty fifty baseline
+universe_label: "Expanded-Universe"
+tickers: ["QQQ", "SPY", "MSFT", "PFE", "JPM", "HD", "KO", "GE", "XOM", "SO", "DOW", "AMT", "T", "INTC", "ORCL", "JNJ","ABT","BAC","WFC","MCD","DIS","PG","WMT","BA","CAT","CVX", "DUK","DD","VZ"]
+
+overall:
+  start: "2001-01-01"
+  end: "2025-09-01"
+
+windows:
+  equal_slices: 10
+  include_rolling_3y: true
+  rolling_step_years: 1
+
+common:
+  initial_capital: 100000
+  slippage_pct: 0.0
+  fee_per_trade: 0.0
+  min_data_fraction: 0.8
+
+# Rebalance cadences to include in the report
+rebalances: ["weekly","monthly","quarterly","semiannual"]
+
+# Momentum basket size
+breadth_min: 3
+breadth_max: 7
+
+output:
+  workbook_path: "Expanded-Universe-S3-MomoBreadth-Report.xlsx"
