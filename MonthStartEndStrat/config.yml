@@ -1,0 +1,7 @@
+# config.yml
+ticker: SPY
+cash_proxy: NONE
+risk_free_rate: 3.0
+years: 20
+window: 5
+outdir: outputs
