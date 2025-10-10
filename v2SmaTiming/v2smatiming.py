@@ -74,12 +74,16 @@ def main():
     # Fetch data
     df = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=False)
     prices = df['Adj Close']
+    if isinstance(prices, pd.DataFrame):
+        prices = prices[ticker]
     returns = prices.pct_change().dropna()
 
     proxy_returns = None
     if cash_proxy != 'NONE':
         proxy_df = yf.download(cash_proxy, start=start, end=end, progress=False, auto_adjust=False)
         proxy_prices = proxy_df['Adj Close']
+        if isinstance(proxy_prices, pd.DataFrame):
+            proxy_prices = proxy_prices[cash_proxy]
         proxy_returns = proxy_prices.pct_change().dropna()
 
     # Align dates

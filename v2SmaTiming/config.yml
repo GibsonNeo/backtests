@@ -1,8 +1,4 @@
 ticker: SPY
-cash_proxy: NONE        # or BIL if you want a T bill proxy for cash
-risk_free_rate: 0.0
 start: 2000-01-01       # set this to any date, if null the script uses the years lookback
-end: null
-years: 10
+years: 20
 sma_windows: [100, 150, 200]
-outdir: outputs
