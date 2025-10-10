@@ -2,139 +2,153 @@ import yaml
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import os
 
-def calculate_metrics(returns, cum_returns, rf=0.0, num_trading_days=252):
-    """
-    Calculate performance metrics for a strategy.
-    """
-    # Total Return (multiplicative factor - 1, but example seems to show factor)
-    # In example, TotalReturn 6.2326 likely the factor (1 + total return)
-    # But for SPY 2000-2024, SPY ~100 to 500, ~5x, close.
-    # Wait, actually probably (final / initial) which is total factor.
-    total_return = cum_returns.iloc[-1]
+TRADING_DAYS = 252
 
-    # Period in years
-    years = len(returns) / num_trading_days
+def ulcer_index_from_curve(curve):
+    peak = curve.cummax()
+    dd = (curve - peak) / peak
+    return np.sqrt((dd.pow(2)).mean()) * 100.0, dd.min()
 
-    # CAGR (geometric annualized return)
-    cagr = (cum_returns.iloc[-1]) ** (1 / years) - 1
+def annualize_mean_std(daily_rets, rf=0.0):
+    ann_return = daily_rets.mean() * TRADING_DAYS
+    ann_vol = daily_rets.std() * np.sqrt(TRADING_DAYS)
+    sharpe = 0.0
+    if ann_vol > 0:
+        daily_rf = rf / TRADING_DAYS
+        sharpe = (daily_rets.mean() - daily_rf) / daily_rets.std() * np.sqrt(TRADING_DAYS)
+    return ann_return, ann_vol, sharpe
 
-    # Annualized Return (arithmetic mean annualized)
-    ann_return = np.mean(returns) * num_trading_days
+def metrics_from_returns(daily_rets, rf=0.0):
+    curve = (1.0 + daily_rets).cumprod()
+    years = len(daily_rets) / TRADING_DAYS
+    total_return = float(curve.iloc[-1])
+    cagr = total_return ** (1.0 / years) - 1.0
+    ann_return, ann_vol, sharpe = annualize_mean_std(daily_rets, rf)
+    ui, maxdd = ulcer_index_from_curve(curve)
+    return dict(
+        CAGR=cagr,
+        AnnReturn=ann_return,
+        AnnVol=ann_vol,
+        Sharpe=sharpe,
+        MaxDD=maxdd,
+        UlcerIndex=ui,
+        TotalReturn=total_return,
+    )
 
-    # Annualized Volatility
-    ann_vol = np.std(returns) * np.sqrt(num_trading_days)
+def fetch_series(ticker, start, end):
+    # price for signals, split adjusted only
+    px = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=False, actions=True)
+    if px.empty:
+        raise ValueError(f"No data for {ticker}")
+    close = px["Close"].copy()
+    splits = px["Stock Splits"].fillna(0)
+    adj = pd.Series(1.0, index=close.index)
+    for dt, ratio in splits[splits != 0].items():
+        if float(ratio) != 0:
+            adj.loc[adj.index < dt] *= 1.0 / float(ratio)
+    price_signal = close * adj
 
-    # Sharpe Ratio (using daily rf)
-    daily_rf = rf / num_trading_days
-    sharpe = (np.mean(returns) - daily_rf) / np.std(returns) * np.sqrt(num_trading_days)
+    # total return for PnL, use Adjusted Close which includes splits and dividends
+    tr_df = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=True)
+    price_tr = tr_df["Close"].rename("AdjClose")
 
-    # Max Drawdown
-    peak = cum_returns.cummax()
-    drawdown = (cum_returns - peak) / peak
-    max_dd = drawdown.min()
+    return price_signal.dropna(), price_tr.dropna()
 
-    # Ulcer Index
-    dd_squared = drawdown ** 2
-    ulcer_index = np.sqrt(np.mean(dd_squared)) * 100  # Often multiplied by 100 for percentage
+def build_daily_strategy_returns(price_signal, price_tr, sma_window, rf=0.0, proxy_rets=None):
+    # daily asset returns in total return terms
+    asset_rets = price_tr.pct_change().dropna()
 
-    return {
-        'CAGR': cagr,
-        'AnnReturn': ann_return,
-        'AnnVol': ann_vol,
-        'Sharpe': sharpe,
-        'MaxDD': max_dd,
-        'UlcerIndex': ulcer_index,
-        'TotalReturn': total_return
-    }
+    # compute SMA on signal price, require a full window, then align to asset return dates
+    sma = price_signal.rolling(window=sma_window, min_periods=sma_window).mean()
+    sig = (price_signal > sma).astype(int).reindex(asset_rets.index).fillna(0)
+    sig = sig.shift(1).fillna(0)  # trade next day open proxy
+
+    if proxy_rets is None:
+        cash_ret = rf / TRADING_DAYS
+        daily = sig * asset_rets + (1 - sig) * cash_ret
+    else:
+        proxy_rets = proxy_rets.reindex(asset_rets.index).fillna(0.0)
+        daily = sig * asset_rets + (1 - sig) * proxy_rets
+    return daily
+
+def to_monthly_signals(price_signal, price_tr, months=10):
+    # month end sampling for the classic 10 month rule
+    ms = price_signal.resample("M").last()
+    mt = price_tr.resample("M").last()
+    sma_m = ms.rolling(window=months, min_periods=months).mean()
+    sig_m = (ms > sma_m).astype(int).shift(1).fillna(0)
+    # convert monthly signal to daily series by forward fill, then align to daily total return dates
+    sig_daily = sig_m.reindex(mt.index).ffill().reindex(price_tr.index).ffill().fillna(0).astype(int)
+    daily_tr = price_tr.pct_change().reindex(sig_daily.index).fillna(0.0)
+    return sig_daily, daily_tr
 
 def main():
-    # Load config
-    with open('config.yml', 'r') as f:
-        config = yaml.safe_load(f)
+    with open("config.yml", "r") as f:
+        cfg = yaml.safe_load(f)
 
-    ticker = config['ticker']
-    cash_proxy = config.get('cash_proxy', 'NONE')
-    rf = config.get('risk_free_rate', 0.0)
-    start = config.get('start')
-    end = config.get('end')
-    years = config.get('years', 10)
-    sma_windows = config['sma_windows']
-    outdir = config.get('outdir', 'outputs')
+    ticker = cfg["ticker"].strip()
+    cash_proxy = cfg.get("cash_proxy", "NONE").strip()
+    rf = float(cfg.get("risk_free_rate", 0.0))
+    start = cfg.get("start")
+    end = cfg.get("end")
+    years = int(cfg.get("years", 10))
+    sma_windows = list(cfg["sma_windows"])
+    outdir = cfg.get("outdir", "outputs")
+    include_monthly_10 = bool(cfg.get("include_monthly_10", True))
 
-    # Handle dates
+    if isinstance(start, date): start = start.strftime("%Y-%m-%d")
+    if isinstance(end, date): end = end.strftime("%Y-%m-%d")
+
     if end is None:
-        end = datetime.today().strftime('%Y-%m-%d')
+        end = datetime.today().strftime("%Y-%m-%d")
     if start is None:
-        start_date = datetime.strptime(end, '%Y-%m-%d') - timedelta(days=365 * years + 1)  # +1 for leap
-        start = start_date.strftime('%Y-%m-%d')
+        end_dt = datetime.strptime(end, "%Y-%m-%d")
+        start = (end_dt - timedelta(days=365 * years + 365)).strftime("%Y-%m-%d")
 
-    # Fetch data
-    df = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=False)
-    prices = df['Adj Close']
-    if isinstance(prices, pd.DataFrame):
-        prices = prices[ticker]
-    returns = prices.pct_change().dropna()
+    max_w = max(sma_windows) if sma_windows else 0
+    # generous warmup so the first valid SMA is truly out of sample
+    ext_start = (datetime.strptime(start, "%Y-%m-%d") - timedelta(days=max_w * 3 + 365)).strftime("%Y-%m-%d")
 
-    proxy_returns = None
-    if cash_proxy != 'NONE':
-        proxy_df = yf.download(cash_proxy, start=start, end=end, progress=False, auto_adjust=False)
-        proxy_prices = proxy_df['Adj Close']
-        if isinstance(proxy_prices, pd.DataFrame):
-            proxy_prices = proxy_prices[cash_proxy]
-        proxy_returns = proxy_prices.pct_change().dropna()
+    sig_px, tr_px = fetch_series(ticker, ext_start, end)
 
-    # Align dates
-    if proxy_returns is not None:
-        common_dates = returns.index.intersection(proxy_returns.index)
-        returns = returns.loc[common_dates]
-        proxy_returns = proxy_returns.loc[common_dates]
-        prices = prices.loc[common_dates]
+    proxy_rets = None
+    if cash_proxy != "NONE":
+        p_sig, p_tr = fetch_series(cash_proxy, ext_start, end)
+        proxy_rets = p_tr.pct_change().dropna()
 
-    # Buy and Hold
-    bh_cum = (1 + returns).cumprod()
-    bh_metrics = calculate_metrics(returns, bh_cum, rf)
+    # buy and hold on total return
+    asset_rets = tr_px.pct_change().dropna()
+    # restrict test window strictly to [start, end]
+    asset_rets = asset_rets[asset_rets.index >= pd.to_datetime(start)]
+    results = {"BuyAndHold": metrics_from_returns(asset_rets, rf)}
 
-    # Results dict
-    results = {'BuyAndHold': bh_metrics}
+    for w in sorted(sma_windows):
+        daily = build_daily_strategy_returns(sig_px, tr_px, w, rf=rf, proxy_rets=proxy_rets)
+        daily = daily[daily.index >= pd.to_datetime(start)]
+        results[f"SMA{w}"] = metrics_from_returns(daily, rf)
 
-    # For each SMA window
-    for w in sma_windows:
-        sma = prices.rolling(window=w).mean()
-        signal = (prices > sma).astype(int)  # 1 if above, 0 below
+    if include_monthly_10:
+        sig_daily, daily_tr = to_monthly_signals(sig_px, tr_px, months=10)
+        daily = sig_daily.shift(0) * daily_tr + (1 - sig_daily.shift(0)) * (proxy_rets.reindex(daily_tr.index).fillna(rf / TRADING_DAYS) if proxy_rets is not None else rf / TRADING_DAYS)
+        daily = daily[daily.index >= pd.to_datetime(start)]
+        results["M10"] = metrics_from_returns(daily, rf)
 
-        # Shift signal for no look-ahead
-        signal = signal.shift(1).fillna(0)  # Start out of market if no data
+    df = pd.DataFrame(results).T
+    df = df[["CAGR", "AnnReturn", "AnnVol", "Sharpe", "MaxDD", "UlcerIndex", "TotalReturn"]].T
+    cols = [f"SMA{w}" for w in sorted(sma_windows)]
+    if include_monthly_10:
+        cols = cols + ["M10"]
+    cols = cols + ["BuyAndHold"]
+    df = df[cols]
 
-        # Strategy returns
-        if cash_proxy == 'NONE':
-            cash_ret = rf / 252  # Approximate daily rf
-            strat_returns = signal * returns + (1 - signal) * cash_ret
-        else:
-            strat_returns = signal * returns + (1 - signal) * proxy_returns
-
-        strat_cum = (1 + strat_returns).cumprod()
-        strat_metrics = calculate_metrics(strat_returns, strat_cum, rf)
-
-        results[f'SMA{w}'] = strat_metrics
-
-    # Create DataFrame for output
-    metrics_df = pd.DataFrame(results).T
-    metrics_df = metrics_df[['CAGR', 'AnnReturn', 'AnnVol', 'Sharpe', 'MaxDD', 'UlcerIndex', 'TotalReturn']].T
-
-    # Reorder columns as in example: SMA100, SMA150, SMA200, BuyAndHold
-    cols = [f'SMA{w}' for w in sorted(sma_windows)] + ['BuyAndHold']
-    metrics_df = metrics_df[cols]
-
-    # Format to 4 decimals for most, 4 for Ulcer, etc.
     print("Overall stats")
-    print(metrics_df.to_string(float_format=lambda x: f"{x:.4f}"))
+    print(df.to_string(float_format=lambda x: f"{x:.4f}"))
 
-    # Optionally save to outdir
     os.makedirs(outdir, exist_ok=True)
-    metrics_df.to_csv(os.path.join(outdir, 'backtest_results.csv'))
+    df.to_csv(os.path.join(outdir, "backtest_results.csv"))
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

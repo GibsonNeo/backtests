@@ -1,4 +1,4 @@
-ticker: SPY
-start: 2000-01-01       # set this to any date, if null the script uses the years lookback
-years: 20
-sma_windows: [100, 150, 200]
+ticker: QQQ
+start: 2012-01-01       # set this to any date, if null the script uses the years lookback
+#years: 14
+sma_windows: [50, 100, 150, 200, 250]
