@@ -4,7 +4,7 @@
 #   python ma_multi_window_report.py --config batch_backtest.yml
 
 universe_label: "SP500-Sector-MATest"
-tickers: ["QQQ", "SPY", "MSFT", "PFE", "JPM", "HD", "KO", "GE", "XOM", "SO", "DOW", "AMT", "T"]
+tickers: ["QQQ", "SPY"]
 
 overall:
   start: "2001-01-01"

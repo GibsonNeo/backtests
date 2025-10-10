@@ -1,0 +1,48 @@
+,SMA100,SMA150,SMA200,BuyAndHold
+CAGR,"Ticker
+SPY    0.060652
+Name: 2025-10-09 00:00:00, dtype: float64","Ticker
+SPY    0.063086
+Name: 2025-10-09 00:00:00, dtype: float64","Ticker
+SPY    0.07216
+Name: 2025-10-09 00:00:00, dtype: float64","Ticker
+SPY    0.080384
+Name: 2025-10-09 00:00:00, dtype: float64"
+AnnReturn,0.06479783741875113,0.0670851207444639,0.07560793282934494,0.09622543359218087
+AnnVol,"Ticker
+SPY    0.108451
+dtype: float64","Ticker
+SPY    0.108381
+dtype: float64","Ticker
+SPY    0.108565
+dtype: float64","Ticker
+SPY    0.194376
+dtype: float64"
+Sharpe,"Ticker
+SPY    0.597484
+dtype: float64","Ticker
+SPY    0.618977
+dtype: float64","Ticker
+SPY    0.696429
+dtype: float64","Ticker
+SPY    0.495047
+dtype: float64"
+MaxDD,"Ticker
+SPY   -0.347614
+dtype: float64","Ticker
+SPY   -0.230289
+dtype: float64","Ticker
+SPY   -0.206766
+dtype: float64","Ticker
+SPY   -0.551895
+dtype: float64"
+UlcerIndex,11.249027779328506,9.678996631307431,7.577337649099691,16.36856522438646
+TotalReturn,"Ticker
+SPY    4.547675
+Name: 2025-10-09 00:00:00, dtype: float64","Ticker
+SPY    4.823911
+Name: 2025-10-09 00:00:00, dtype: float64","Ticker
+SPY    6.002614
+Name: 2025-10-09 00:00:00, dtype: float64","Ticker
+SPY    7.304126
+Name: 2025-10-09 00:00:00, dtype: float64"

@@ -5,7 +5,7 @@
 #   python ma_exit_variants_report.py --config exit_variants.yml
 
 universe_label: "SP500-Sector-ExitTest"
-tickers: ["QQQ", "SPY", "MSFT", "PFE", "JPM", "HD", "KO", "GE", "XOM", "SO", "DOW", "AMT", "T"]
+tickers: ["QQQ", "SPY"]
 
 overall:
   start: "2001-01-01"
