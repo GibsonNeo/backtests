@@ -1,0 +1,1 @@
+It was determined from v4 testing that the 1 day across the board was the best confirmation exit.  However the immediate did result in very large drawdown limits, but with eqully large upside limiter.  So we want to see now how a 1 day vs immediate exit on each of the SMAs effect results.

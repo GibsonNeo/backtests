@@ -1,0 +1,1 @@
+Seems that entry on 3 day confirmation is best with a  100, 200, 221 SMA sleeve (third each) for a 70/30 QQQ/SPY split portfolio.  Now we will be testing different SMA lengths and with a tiered exit, so 100SMA waits 2 days before exit, 200 1day and 221 is immediate.  We will continue with this tiering but test new lengths.
