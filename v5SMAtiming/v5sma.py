@@ -56,7 +56,7 @@ def fetch_series(ticker, start, end_inclusive):
     return price_signal.loc[idx], price_tr.loc[idx]
 
 # ---------------- sleeve logic ----------------
-def _rolling_sma(x, w): 
+def _rolling_sma(x, w):
     return x.rolling(window=w, min_periods=w).mean()
 
 def _consec_true(mask, n):
@@ -211,6 +211,7 @@ def main():
     # ---- main run loop ----
     for (run_start, run_end) in sample_windows:
         print(f"\nRunning window {run_start} → {run_end}")
+
         for ex in exit_variants:
             label = f"x100_{ex['100']}_x200_{ex['200']}_x221_{ex['221']}"
             hybrid_daily_all, hybrid_pos_all = {}, {}
@@ -239,8 +240,9 @@ def main():
                 blended_pos = sum(weights[t] * hybrid_pos_all[t] for t in tickers)
                 per_year_rows.append(per_year_stats(hybrid_daily, blended_pos, sharpe_rf, label))
 
-        # Buy & Hold baseline
+        # ---- Baselines ----
         if include_baseline_buyhold:
+            # Buy & Hold
             bh_daily = []
             for t in tickers:
                 rets = data[t]["tr"].loc[run_start:run_end].pct_change().fillna(0.0)
@@ -253,6 +255,62 @@ def main():
             if write_per_year:
                 per_year_rows.append(per_year_stats(bh, pd.Series(1.0, index=bh.index), sharpe_rf, "baseline_buyhold"))
 
+            # SMA-200 3-in / 1-out
+            for t in tickers:
+                sig_px = data[t]["sig"].loc[run_start:run_end]
+                tr_px = data[t]["tr"].loc[run_start:run_end]
+                pos = sleeve_position(sig_px, window=200, entry_days=3, exit_days=1)
+                rets = tr_px.pct_change().fillna(0.0)
+                daily = pos * rets + (1 - pos) * daily_cash
+                m = metrics_from_returns(daily, sharpe_rf)
+                m["variant"] = "baseline_sma200_3in_1out"
+                m["window"] = f"{run_start}_{run_end}"
+                results.append(m)
+                if write_per_year:
+                    per_year_rows.append(per_year_stats(daily, pos, sharpe_rf, "baseline_sma200_3in_1out"))
+
+            # SMA-200 3-in / 0-out
+            for t in tickers:
+                sig_px = data[t]["sig"].loc[run_start:run_end]
+                tr_px = data[t]["tr"].loc[run_start:run_end]
+                pos = sleeve_position(sig_px, window=200, entry_days=3, exit_days=0)
+                rets = tr_px.pct_change().fillna(0.0)
+                daily = pos * rets + (1 - pos) * daily_cash
+                m = metrics_from_returns(daily, sharpe_rf)
+                m["variant"] = "baseline_sma200_3in_0out"
+                m["window"] = f"{run_start}_{run_end}"
+                results.append(m)
+                if write_per_year:
+                    per_year_rows.append(per_year_stats(daily, pos, sharpe_rf, "baseline_sma200_3in_0out"))
+
+            # SMA-100 3-in / 1-out
+            for t in tickers:
+                sig_px = data[t]["sig"].loc[run_start:run_end]
+                tr_px = data[t]["tr"].loc[run_start:run_end]
+                pos = sleeve_position(sig_px, window=100, entry_days=3, exit_days=1)
+                rets = tr_px.pct_change().fillna(0.0)
+                daily = pos * rets + (1 - pos) * daily_cash
+                m = metrics_from_returns(daily, sharpe_rf)
+                m["variant"] = "baseline_sma100_3in_1out"
+                m["window"] = f"{run_start}_{run_end}"
+                results.append(m)
+                if write_per_year:
+                    per_year_rows.append(per_year_stats(daily, pos, sharpe_rf, "baseline_sma100_3in_1out"))
+
+            # SMA-100 3-in / 0-out
+            for t in tickers:
+                sig_px = data[t]["sig"].loc[run_start:run_end]
+                tr_px = data[t]["tr"].loc[run_start:run_end]
+                pos = sleeve_position(sig_px, window=100, entry_days=3, exit_days=0)
+                rets = tr_px.pct_change().fillna(0.0)
+                daily = pos * rets + (1 - pos) * daily_cash
+                m = metrics_from_returns(daily, sharpe_rf)
+                m["variant"] = "baseline_sma100_3in_0out"
+                m["window"] = f"{run_start}_{run_end}"
+                results.append(m)
+                if write_per_year:
+                    per_year_rows.append(per_year_stats(daily, pos, sharpe_rf, "baseline_sma100_3in_0out"))
+
     # ---- write output ----
     overall = pd.DataFrame(results)
     overall = overall[["window", "variant", "CAGR", "AnnReturn", "AnnVol", "Sharpe", "MaxDD", "UlcerIndex", "TotalReturn"]]
@@ -261,6 +319,34 @@ def main():
     if write_per_year and per_year_rows:
         yr = pd.concat(per_year_rows, ignore_index=True)
         yr.to_csv(os.path.join(outdir, "per_year_random.csv"), index=False)
+
+    # ---- aggregate summary averages ----
+    overall_df = pd.read_csv(os.path.join(outdir, "random_runs_summary.csv"))
+    is_baseline = overall_df["variant"].str.contains("baseline", case=False, regex=False)
+    strategies = overall_df[~is_baseline].copy()
+    baselines = overall_df[is_baseline].copy()
+
+    metrics = ["CAGR","AnnReturn","AnnVol","Sharpe","MaxDD","UlcerIndex","TotalReturn"]
+
+    avg_by_variant = strategies.groupby("variant", as_index=False)[metrics].mean()
+    avg_by_variant = avg_by_variant.sort_values(["Sharpe","CAGR"], ascending=[False, False])
+
+    strategies["rank_in_window"] = strategies.groupby("window")["Sharpe"].rank(ascending=False, method="min")
+    wins = strategies.loc[strategies["rank_in_window"] == 1.0].groupby("variant").size().rename("wins").reset_index()
+    total_windows = max(1, strategies["window"].nunique())
+    avg_plus_wins = avg_by_variant.merge(wins, on="variant", how="left").fillna({"wins": 0})
+    avg_plus_wins["win_share"] = avg_plus_wins["wins"] / total_windows
+
+    baseline_avg = baselines.groupby("variant", as_index=False)[metrics].mean()
+
+    combined = pd.concat([
+        avg_plus_wins.assign(group="strategy"),
+        baseline_avg.assign(group="baseline")
+    ], ignore_index=True, sort=False)
+
+    avg_path = os.path.join(outdir, "random_runs_summary_averages.csv")
+    combined.to_csv(avg_path, index=False)
+    print(f"✅ Wrote {avg_path}")
 
     print(f"\n✅ Wrote {os.path.join(outdir, 'random_runs_summary.csv')}")
     if write_per_year:
