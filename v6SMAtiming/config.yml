@@ -35,6 +35,6 @@ write_per_year: false
 
 random_sampling:
   enabled: true
-  num_samples: 500
+  num_samples: 10
   min_years: 3
   max_years: 25
