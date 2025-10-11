@@ -1,5 +1,5 @@
-tickers: [QQQ]
-weights: { QQQ: 1.00 }
+tickers: [SPY]
+weights: { SPY: 1.00 }
 
 start: 2000-01-01
 end: 2025-10-01
@@ -35,6 +35,6 @@ write_per_year: false
 
 random_sampling:
   enabled: true
-  num_samples: 10
+  num_samples: 500
   min_years: 3
   max_years: 25

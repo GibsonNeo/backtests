@@ -55,18 +55,19 @@ def fetch_series(ticker, start, end_inclusive):
     splits = _get_col(px, "Stock Splits", ticker).fillna(0.0).astype(float)
     split_factor = splits.replace(0.0, 1.0)
 
-    # --- FIXED BUG: reverse cumulative for proper backward adjustment ---
-    if (split_factor.between(0.0, 1.0, inclusive="neither")).any():
-        split_factor = split_factor.where(split_factor >= 1.0, 1.0 / split_factor)
-    split_adj = (1.0 / split_factor)[::-1].cumprod()[::-1].shift(1).fillna(1.0)
+    # --- FINAL FIX: Proper backward adjustment using reverse cumprod and shift(-1) ---
+    # This ensures pre-split prices are adjusted downward, making the series continuous.
+    split_adj = (1.0 / split_factor)[::-1].cumprod()[::-1].shift(-1).fillna(1.0)
 
-    price_signal = close * split_adj  # used for SMA signals only
+    price_signal = close * split_adj  # used for SMA-based signal calculations
 
+    # Fetch total-return adjusted prices (dividends + splits)
     tr_df = yf.download(ticker, start=start, end=end_exclusive, progress=False, auto_adjust=True)
     price_tr = _get_col(tr_df, "Close", ticker).rename("AdjClose").astype(float)
 
     idx = price_signal.index.intersection(price_tr.index)
     return price_signal.loc[idx], price_tr.loc[idx]
+
 
 # ---------------- sleeve logic ----------------
 def _rolling_sma(x, w):
