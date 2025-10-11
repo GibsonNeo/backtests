@@ -1,0 +1,39 @@
+tickers: [QQQ, SPY]
+weights: { QQQ: 0.70, SPY: 0.30 }
+
+start: 2000-01-01
+end: 2025-10-01
+outdir: outputs_exit_grid
+
+cash_rate_percent: 3.0
+sharpe_rf_percent: 3.0
+
+tier_windows: [100, 200, 221]
+entry_days_by_window: { "100": 3, "200": 3, "221": 3 }
+
+# Set to true to auto generate all 0 or 1 exit mixes for 100, 200, 221
+auto_binary_exit_grid: true
+
+# If you want to override the grid, comment out auto_binary_exit_grid, then list maps below
+# exit_variants:
+#   - { "100": 0, "200": 0, "221": 0 }
+#   - { "100": 1, "200": 0, "221": 0 }
+#   - { "100": 0, "200": 1, "221": 0 }
+#   - { "100": 0, "200": 0, "221": 1 }
+#   - { "100": 1, "200": 1, "221": 0 }
+#   - { "100": 1, "200": 0, "221": 1 }
+#   - { "100": 0, "200": 1, "221": 1 }
+#   - { "100": 1, "200": 1, "221": 1 }
+
+include_baseline_sma200: true
+include_baseline_buyhold: true
+apply_overlay_to_baselines: false
+
+write_per_year: false
+
+random_sampling:
+  enabled: true
+  num_samples: 20         # number of random runs
+  min_years: 5
+  max_years: 25
+
