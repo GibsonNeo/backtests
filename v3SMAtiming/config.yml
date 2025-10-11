@@ -1,0 +1,27 @@
+# Universe
+tickers: [QQQ, SPY]
+weights: { QQQ: 0.70, SPY: 0.30 }
+
+# Backtest window, you can also add a runs block like before if you want scenarios
+start: 2015-01-01
+end: 2025-10-01
+outdir: outputs
+
+# Cash and Sharpe settings
+cash_rate_percent: 3.0          # earned on the fraction that is flat
+sharpe_rf_percent: 3.0          # Sharpe in excess of bills
+
+# Optional portfolio level circuit breaker
+max_drawdown_percent: 20.0      # if the combined portfolio curve draws down past this, park in cash until a new high
+
+# Tiered sleeves, fixed
+tier_sma_windows: [100, 200, 221]
+
+# Entry and exit delays to test, in trading days
+# 0 means immediate
+entry_days_to_test: [0, 1, 2, 3]
+exit_days_to_test:  [0, 1, 2, 3]
+
+# Baselines
+include_baseline_sma200: true
+include_baseline_buyhold: true

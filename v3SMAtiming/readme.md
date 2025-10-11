@@ -1,0 +1,1 @@
+This is for a strat where we have a 70% QQQ and 30% SPY split.  Where the system breaks each into 3rds and trades (enter/exit) on the 100SMA, 200SMA, and 221SMA.  We are going to first test different confirmation days from immediate trades, 1 day delay, 2 day delay, or 3 day delay and get the AI system to tell us what is best.
