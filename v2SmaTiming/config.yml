@@ -1,13 +1,38 @@
-ticker: SPY
-cash_proxy: NONE
-start: 2010-01-01
-end: 2025-10-01
 
-sma_windows: [50, 100, 150, 200, 250]
+ticker: QQQ
+cash_proxy: NONE
+
+start: 1999-01-01
+end: 2023-10-10
+
+sma_windows: [50, 100, 150, 200, 220, 221, 225, 230, 240, 250, 252, 300]
 include_monthly_10: true
+apply_entry_to_m10: false
 outdir: outputs
 
-# New fields, in percent per year
-cash_rate_percent: 3.0          # earns this when out of market
-sharpe_rf_percent: 3.0          # Sharpe versus zero, set to 3.0 if you want excess vs T-bill
-#max_drawdown_percent: 20.0      # max drawdown tolerated before going to cash
+cash_rate_percent: 3.0
+sharpe_rf_percent: 3.0
+max_drawdown_percent: 20.0
+
+entry:
+  mode: days_above        # options, immediate, days_above, sma_slope, both
+  days_above: 3           # require this many consecutive days above SMA to re enter
+  #slope_lookback: 50       # lookback length for SMA slope
+  slope_min_per_day: 0.0  # required SMA slope per day, in percent units, 0 means non negative
+
+runs:
+  - name: base
+    start: 2012-01-01
+    end: 2025-10-01
+
+  - name: pre_covid
+    start: 2012-01-01
+    end: 2019-12-31
+
+  - name: post_covid
+    start: 2020-01-01
+    end: 2025-10-01
+
+  - name: bull_only
+    start: 2016-01-01
+    end: 2021-12-31
