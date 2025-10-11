@@ -8,8 +8,8 @@ outdir: outputs_exit_grid
 cash_rate_percent: 3.0
 sharpe_rf_percent: 3.0
 
-tier_windows: [100, 200, 221]
-entry_days_by_window: { "100": 3, "200": 3, "221": 3 }
+tier_windows: [100, 200]
+entry_days_by_window: { "100": 3, "200": 3}
 
 # Set to true to auto generate all 0 or 1 exit mixes for 100, 200, 221
 auto_binary_exit_grid: true

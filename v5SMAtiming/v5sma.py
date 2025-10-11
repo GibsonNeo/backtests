@@ -163,13 +163,14 @@ def main():
     daily_cash = cash_rate / TRADING_DAYS
     os.makedirs(outdir, exist_ok=True)
 
-    # Build exit variants
+    # Build exit variants dynamically from tier_windows
     if auto_binary_exit_grid:
         vals = [0, 1]
-        combos = list(itertools.product(vals, vals, vals))
+        combos = list(itertools.product(vals, repeat=len(tier_windows)))
         exit_variants = []
-        for x100, x200, x221 in combos:
-            exit_variants.append({"100": x100, "200": x200, "221": x221})
+        for combo in combos:
+            ex_dict = {str(w): combo[i] for i, w in enumerate(tier_windows)}
+            exit_variants.append(ex_dict)
     elif not exit_variants:
         raise ValueError("No exit variants provided")
 
@@ -213,7 +214,9 @@ def main():
         print(f"\nRunning window {run_start} → {run_end}")
 
         for ex in exit_variants:
-            label = f"x100_{ex['100']}_x200_{ex['200']}_x221_{ex['221']}"
+            # Build a label like: x100_1_x200_0 (or x100_1_x200_0_x221_1 if 221 is present)
+            label = "x" + "_".join([f"{w}_{int(ex[str(w)])}" for w in tier_windows])
+
             hybrid_daily_all, hybrid_pos_all = {}, {}
             for t in tickers:
                 sig_px = data[t]["sig"].loc[run_start:run_end]
