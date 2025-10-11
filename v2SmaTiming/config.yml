@@ -1,4 +1,13 @@
-ticker: QQQ
-start: 2012-01-01       # set this to any date, if null the script uses the years lookback
-#years: 14
+ticker: SPY
+cash_proxy: NONE
+start: 2010-01-01
+end: 2025-10-01
+
 sma_windows: [50, 100, 150, 200, 250]
+include_monthly_10: true
+outdir: outputs
+
+# New fields, in percent per year
+cash_rate_percent: 3.0          # earns this when out of market
+sharpe_rf_percent: 3.0          # Sharpe versus zero, set to 3.0 if you want excess vs T-bill
+#max_drawdown_percent: 20.0      # max drawdown tolerated before going to cash
