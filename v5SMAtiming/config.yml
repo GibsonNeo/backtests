@@ -1,5 +1,5 @@
-tickers: [QQQ, SPY]
-weights: { QQQ: 0.70, SPY: 0.30 }
+tickers: [QQQ]
+weights: { QQQ: 1.00 }
 
 start: 2000-01-01
 end: 2025-10-01

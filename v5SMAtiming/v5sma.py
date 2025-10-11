@@ -154,17 +154,13 @@ def main():
 
     tier_windows = cfg.get("tier_windows", [100, 200, 221])
     entry_days_by_window = cfg.get("entry_days_by_window", {"100": 3, "200": 3, "221": 3})
-
     auto_binary_exit_grid = bool(cfg.get("auto_binary_exit_grid", True))
     exit_variants = cfg.get("exit_variants")
 
     write_per_year = bool(cfg.get("write_per_year", False))
-    include_baseline_sma200 = bool(cfg.get("include_baseline_sma200", True))
     include_baseline_buyhold = bool(cfg.get("include_baseline_buyhold", True))
-    overlay_baselines = bool(cfg.get("apply_overlay_to_baselines", False))
 
     daily_cash = cash_rate / TRADING_DAYS
-
     os.makedirs(outdir, exist_ok=True)
 
     # Build exit variants
@@ -173,7 +169,7 @@ def main():
         combos = list(itertools.product(vals, vals, vals))
         exit_variants = []
         for x100, x200, x221 in combos:
-            exit_variants.append({ "100": x100, "200": x200, "221": x221 })
+            exit_variants.append({"100": x100, "200": x200, "221": x221})
     elif not exit_variants:
         raise ValueError("No exit variants provided")
 
@@ -187,96 +183,88 @@ def main():
         tr = tr[tr.index >= pd.to_datetime(start)]
         data[t] = dict(sig=sig, tr=tr)
 
+    # ---- random sampling windows ----
+    rand_cfg = cfg.get("random_sampling", {})
+    if rand_cfg.get("enabled", False):
+        num_samples = int(rand_cfg.get("num_samples", 20))
+        min_years = int(rand_cfg.get("min_years", 5))
+        max_years = int(rand_cfg.get("max_years", 10))
+        start_dt = pd.to_datetime(start)
+        end_dt = pd.to_datetime(end)
+        all_days = pd.bdate_range(start_dt, end_dt)
+        sample_windows = []
+        for _ in range(num_samples):
+            s = np.random.choice(all_days[:-TRADING_DAYS * min_years])
+            if not isinstance(s, pd.Timestamp):
+                s = pd.Timestamp(s)
+            random_days = int(np.random.randint(min_years * 365, max_years * 365))
+            possible_end = s + timedelta(days=random_days)
+            e = min(possible_end, end_dt)
+            if (e - s).days >= min_years * 365:
+                sample_windows.append((s.strftime("%Y-%m-%d"), e.strftime("%Y-%m-%d")))
+    else:
+        sample_windows = [(start, end)]
+
     results = []
     per_year_rows = []
 
-    # Run all exit mixes
-    for ex in exit_variants:
-        # human friendly label, for example x100_0_x200_1_x221_1
-        label = f"x100_{ex['100']}_x200_{ex['200']}_x221_{ex['221']}"
-
-        hybrid_daily_all = {}
-        hybrid_pos_all = {}
-        for t in tickers:
-            sig_px = data[t]["sig"]
-            tr_px = data[t]["tr"]
-            pos = hybrid_position(sig_px, tier_windows, entry_days_by_window, ex)
-            asset_rets = tr_px.pct_change().fillna(0.0)
-            daily = pos * asset_rets + (1 - pos) * daily_cash
-            hybrid_daily_all[t] = daily.reindex(asset_rets.index).fillna(0.0)
-            hybrid_pos_all[t] = pos.reindex(asset_rets.index).fillna(0.0)
-
-        # Align to common index
-        common_index = None
-        for t in tickers:
-            common_index = hybrid_daily_all[t].index if common_index is None else common_index.intersection(hybrid_daily_all[t].index)
-        for t in tickers:
-            hybrid_daily_all[t] = hybrid_daily_all[t].reindex(common_index).fillna(0.0)
-            hybrid_pos_all[t] = hybrid_pos_all[t].reindex(common_index).fillna(0.0)
-
-        # Portfolio blend
-        hybrid_daily = sum(weights[t] * hybrid_daily_all[t] for t in tickers)
-
-        # Metrics
-        m = metrics_from_returns(hybrid_daily, sharpe_rf)
-        m["variant"] = label
-        results.append(m)
-
-        # Per year optional
-        if write_per_year:
-            blended_pos = sum(weights[t] * hybrid_pos_all[t] for t in tickers)
-            per_year_rows.append(per_year_stats(hybrid_daily, blended_pos, sharpe_rf, label))
-
-    # Baselines, aligned to broad common index
-    if include_baseline_buyhold or include_baseline_sma200:
-        common_index = None
-        for t in tickers:
-            idx = data[t]["tr"].index
-            common_index = idx if common_index is None else common_index.intersection(idx)
-
-        if include_baseline_buyhold:
-            rets = {}
+    # ---- main run loop ----
+    for (run_start, run_end) in sample_windows:
+        print(f"\nRunning window {run_start} → {run_end}")
+        for ex in exit_variants:
+            label = f"x100_{ex['100']}_x200_{ex['200']}_x221_{ex['221']}"
+            hybrid_daily_all, hybrid_pos_all = {}, {}
             for t in tickers:
-                a = data[t]["tr"].pct_change().reindex(common_index).fillna(0.0)
-                rets[t] = a
-            bh = sum(weights[t] * rets[t] for t in tickers)
+                sig_px = data[t]["sig"].loc[run_start:run_end]
+                tr_px = data[t]["tr"].loc[run_start:run_end]
+                pos = hybrid_position(sig_px, tier_windows, entry_days_by_window, ex)
+                asset_rets = tr_px.pct_change().fillna(0.0)
+                daily = pos * asset_rets + (1 - pos) * daily_cash
+                hybrid_daily_all[t] = daily
+                hybrid_pos_all[t] = pos
+
+            common_index = set.intersection(*(set(x.index) for x in hybrid_daily_all.values()))
+            common_index = pd.DatetimeIndex(sorted(common_index))
+            for t in tickers:
+                hybrid_daily_all[t] = hybrid_daily_all[t].reindex(common_index).fillna(0.0)
+                hybrid_pos_all[t] = hybrid_pos_all[t].reindex(common_index).fillna(0.0)
+
+            hybrid_daily = sum(weights[t] * hybrid_daily_all[t] for t in tickers)
+            m = metrics_from_returns(hybrid_daily, sharpe_rf)
+            m["variant"] = label
+            m["window"] = f"{run_start}_{run_end}"
+            results.append(m)
+
+            if write_per_year:
+                blended_pos = sum(weights[t] * hybrid_pos_all[t] for t in tickers)
+                per_year_rows.append(per_year_stats(hybrid_daily, blended_pos, sharpe_rf, label))
+
+        # Buy & Hold baseline
+        if include_baseline_buyhold:
+            bh_daily = []
+            for t in tickers:
+                rets = data[t]["tr"].loc[run_start:run_end].pct_change().fillna(0.0)
+                bh_daily.append(weights[t] * rets)
+            bh = sum(bh_daily)
             m = metrics_from_returns(bh, sharpe_rf)
             m["variant"] = "baseline_buyhold"
+            m["window"] = f"{run_start}_{run_end}"
             results.append(m)
             if write_per_year:
-                per_year_rows.append(per_year_stats(bh, pd.Series(1.0, index=common_index), sharpe_rf, "baseline_buyhold"))
+                per_year_rows.append(per_year_stats(bh, pd.Series(1.0, index=bh.index), sharpe_rf, "baseline_buyhold"))
 
-        if include_baseline_sma200:
-            rets = {}
-            posb = {}
-            for t in tickers:
-                sig_px = data[t]["sig"].reindex(common_index)
-                tr_px = data[t]["tr"].reindex(common_index)
-                p200 = sleeve_position(sig_px, window=200, entry_days=3, exit_days=0).reindex(common_index).fillna(0.0)
-                ar = tr_px.pct_change().fillna(0.0)
-                r200 = p200 * ar + (1 - p200) * daily_cash
-                rets[t] = r200
-                posb[t] = p200
-            s200 = sum(weights[t] * rets[t] for t in tickers)
-            m = metrics_from_returns(s200, sharpe_rf)
-            m["variant"] = "baseline_sma200"
-            results.append(m)
-            if write_per_year:
-                blended_p = sum(weights[t] * posb[t] for t in tickers)
-                per_year_rows.append(per_year_stats(s200, blended_p, sharpe_rf, "baseline_sma200"))
-
-    # Write combined results
+    # ---- write output ----
     overall = pd.DataFrame(results)
-    overall = overall[["variant", "CAGR", "AnnReturn", "AnnVol", "Sharpe", "MaxDD", "UlcerIndex", "TotalReturn"]]
-    overall.to_csv(os.path.join(outdir, "overall_exit_grid.csv"), index=False)
+    overall = overall[["window", "variant", "CAGR", "AnnReturn", "AnnVol", "Sharpe", "MaxDD", "UlcerIndex", "TotalReturn"]]
+    overall.to_csv(os.path.join(outdir, "random_runs_summary.csv"), index=False)
 
     if write_per_year and per_year_rows:
         yr = pd.concat(per_year_rows, ignore_index=True)
-        yr.to_csv(os.path.join(outdir, "per_year_exit_grid.csv"), index=False)
+        yr.to_csv(os.path.join(outdir, "per_year_random.csv"), index=False)
 
-    print(f"Wrote {os.path.join(outdir, 'overall_exit_grid.csv')}")
+    print(f"\n✅ Wrote {os.path.join(outdir, 'random_runs_summary.csv')}")
     if write_per_year:
-        print(f"Wrote {os.path.join(outdir, 'per_year_exit_grid.csv')}")
+        print(f"✅ Wrote {os.path.join(outdir, 'per_year_random.csv')}")
 
 if __name__ == "__main__":
     main()
