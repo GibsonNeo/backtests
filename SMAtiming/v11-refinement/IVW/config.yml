@@ -6,8 +6,8 @@ start: 2001-05-01
 end: 2025-10-01
 outdir: outputs_exit_grid
 
-cash_rate_percent: 3.0
-sharpe_rf_percent: 3.0
+cash_rate_percent: 0
+sharpe_rf_percent: 0
 
 default_entry_days: 3
 entry_days_by_window: { "100": 3, "150": 3, "200": 3, "250": 3 }
