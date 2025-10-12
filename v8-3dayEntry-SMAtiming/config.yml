@@ -59,7 +59,7 @@ write_per_year: false
 
 random_sampling:
   enabled: true
-  num_samples: 10
+  num_samples: 500
   min_years: 5
   max_years: 5
   # random_seed: 42    # optional for reproducibility
