@@ -417,58 +417,40 @@ def main():
     baseline_sharpe_by_window = baselines.set_index("window")["Sharpe"].to_dict()
     baseline_cagr_by_window = baselines.set_index("window")["CAGR"].to_dict()
 
-    # Per window winners that beat baseline in each category
-    def split_sharpe_wins(g):
-        win_id = g["window"].iat[0]
+    # Winner credit using explicit loops
+    sharpe_rows = []
+    for win_id, g in strategies.groupby("window"):
         base = baseline_sharpe_by_window.get(win_id)
         if base is None:
-            return pd.DataFrame(columns=["variant", "sharpe_credit"])
+            continue
         eligible = g[g["Sharpe"] > base]
         if eligible.empty:
-            return pd.DataFrame(columns=["variant", "sharpe_credit"])
+            continue
         best = eligible["Sharpe"].max()
-        winners = eligible[eligible["Sharpe"] == best]["variant"]
-        credit = 1.0 / len(winners)
-        return pd.DataFrame({"variant": winners.values, "sharpe_credit": credit})
+        winners = eligible.loc[eligible["Sharpe"] == best, "variant"]
+        credit = 1.0 / max(len(winners), 1)
+        sharpe_rows.append(pd.DataFrame({"variant": winners.values, "sharpe_credit": credit}))
+    if sharpe_rows:
+        sharpe_credits = pd.concat(sharpe_rows, ignore_index=True)
+    else:
+        sharpe_credits = pd.DataFrame(columns=["variant", "sharpe_credit"])
 
-    def split_cagr_wins(g):
-        win_id = g["window"].iat[0]
+    cagr_rows = []
+    for win_id, g in strategies.groupby("window"):
         base = baseline_cagr_by_window.get(win_id)
         if base is None:
-            return pd.DataFrame(columns=["variant", "cagr_credit"])
+            continue
         eligible = g[g["CAGR"] > base]
         if eligible.empty:
-            return pd.DataFrame(columns=["variant", "cagr_credit"])
+            continue
         best = eligible["CAGR"].max()
-        winners = eligible[eligible["CAGR"] == best]["variant"]
-        credit = 1.0 / len(winners)
-        return pd.DataFrame({"variant": winners.values, "cagr_credit": credit})
-
-        # Apply winner credit systems, silence pandas warnings
-    # Pandas 2.2 and newer support include_groups on GroupBy.apply
-    try:
-        sharpe_credits = (
-            strategies.groupby("window", group_keys=False)
-            .apply(split_sharpe_wins, include_groups=False)
-            .reset_index(drop=True)
-        )
-        cagr_credits = (
-            strategies.groupby("window", group_keys=False)
-            .apply(split_cagr_wins, include_groups=False)
-            .reset_index(drop=True)
-        )
-    except TypeError:
-        # Fallback for older pandas that do not support include_groups
-        sharpe_credits = (
-            strategies.groupby("window", group_keys=False)
-            .apply(split_sharpe_wins)
-            .reset_index(drop=True)
-        )
-        cagr_credits = (
-            strategies.groupby("window", group_keys=False)
-            .apply(split_cagr_wins)
-            .reset_index(drop=True)
-        )
+        winners = eligible.loc[eligible["CAGR"] == best, "variant"]
+        credit = 1.0 / max(len(winners), 1)
+        cagr_rows.append(pd.DataFrame({"variant": winners.values, "cagr_credit": credit}))
+    if cagr_rows:
+        cagr_credits = pd.concat(cagr_rows, ignore_index=True)
+    else:
+        cagr_credits = pd.DataFrame(columns=["variant", "cagr_credit"])
 
     sharpe_wins = (
         sharpe_credits.groupby("variant")["sharpe_credit"]
@@ -483,7 +465,6 @@ def main():
         .reset_index()
     )
 
-
     # Merge wins into averages
     avg_plus_wins = avg_by_variant.merge(sharpe_wins, on="variant", how="left")
     avg_plus_wins = avg_plus_wins.merge(cagr_wins, on="variant", how="left")
@@ -495,6 +476,25 @@ def main():
     # Baseline averages for reference
     baseline_avg = baselines.groupby("variant", as_index=False)[metrics_cols].mean()
 
+    # Filename prefix, <TICKERS>, <YEARS>yr, <SAMPLES>samples
+    ticker_label = "+".join(tickers)
+    if rand_cfg.get("enabled", False):
+        min_years = int(rand_cfg.get("min_years", 0))
+        max_years = int(rand_cfg.get("max_years", 0))
+        if min_years > 0 and max_years > 0:
+            years_label = f"{min_years}yr" if min_years == max_years else f"{min_years}to{max_years}yr"
+        else:
+            years_label = "win"
+        samples_label = f"{len(sample_windows)}samples"
+    else:
+        start_dt = pd.to_datetime(start)
+        end_dt = pd.to_datetime(end)
+        span_years = max(1, int(round((end_dt - start_dt).days / 365.25)))
+        years_label = f"{span_years}yr"
+        samples_label = f"{len(sample_windows)}samples"
+
+    prefix = f"{ticker_label}-{years_label}-{samples_label}_"
+
     combined = pd.concat(
         [
             avg_plus_wins.assign(group="strategy"),
@@ -503,24 +503,6 @@ def main():
         ignore_index=True,
         sort=False,
     )
-
-    # Filename prefix, <TICKERS>-<YEARS>yr_
-    ticker_label = "+".join(tickers)
-    rand_cfg = cfg.get("random_sampling", {})
-    if rand_cfg.get("enabled", False):
-        min_years = int(rand_cfg.get("min_years", 0))
-        max_years = int(rand_cfg.get("max_years", 0))
-        if min_years > 0 and max_years > 0:
-            years_label = f"{min_years}yr" if min_years == max_years else f"{min_years}to{max_years}yr"
-        else:
-            years_label = "win"
-    else:
-        start_dt = pd.to_datetime(start)
-        end_dt = pd.to_datetime(end)
-        span_years = max(1, int(round((end_dt - start_dt).days / 365.25)))
-        years_label = f"{span_years}yr"
-
-    prefix = f"{ticker_label}-{years_label}_"
 
     # Save all outputs with prefix
     avg_path = os.path.join(outdir, f"{prefix}random_runs_summary_averages.csv")
