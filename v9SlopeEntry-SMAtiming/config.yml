@@ -9,48 +9,61 @@ outdir: outputs_exit_grid
 cash_rate_percent: 3.0
 sharpe_rf_percent: 3.0
 
-# use slope for entry, D consecutive positive SMA slope days
-entry_mode: slope
-entry_slope_days_by_window: { "20": 3, "50": 3, "100": 3, "200": 3 }
-entry_slope_eps_bps: 0.5
+# choose entry engine, slope uses a single global SMA for the slope test
+entry_engine: slope        # slope, or classic
+entry_slope_window: 20     # global SMA window for slope test
+entry_slope_days: 3        # consecutive slope up days
+entry_slope_eps_bps: 0.5   # threshold in basis points per day, 0.5 bps equals 0.00005
+# optional, appended to every output file name without changing in sheet labels
+output_name_suffix: slope-entry
 
-# keep exits unchanged, consecutive closes at or below SMA by window
+
+# classic map is kept for backward compatibility, unused when entry_engine equals slope
+entry_days_by_window: { "100": 3, "150": 3, "200": 3, "250": 3 }
+
+single_sma_strategies:
+  - { name: "sma100_3in_1out", window: 100, exit_days: 1 }
+  - { name: "sma100_3in_2out", window: 100, exit_days: 2 }
+  - { name: "sma100_3in_3out", window: 100, exit_days: 3 }
+  - { name: "sma150_3in_1out", window: 150, exit_days: 1 }
+  - { name: "sma150_3in_2out", window: 150, exit_days: 2 }
+  - { name: "sma150_3in_3out", window: 150, exit_days: 3 }
+  - { name: "sma200_3in_1out", window: 200, exit_days: 1 }
+  - { name: "sma200_3in_2out", window: 200, exit_days: 2 }
+  - { name: "sma200_3in_3out", window: 200, exit_days: 3 }
+  - { name: "sma250_3in_1out", window: 250, exit_days: 1 }
+  - { name: "sma250_3in_2out", window: 250, exit_days: 2 }
+  - { name: "sma250_3in_3out", window: 250, exit_days: 3 }
+
 strategy_tier_sets:
-  - [20, 50]
-  - [20, 100, 200]
-  - [50, 100, 200]
+  - [100, 200]
+  - [100, 150, 200]
+  - [100, 200, 250]
 
 exit_variants_by_set:
-  "[20, 50]":
-    - { "20": 1, "50": 1 }
-    - { "20": 2, "50": 1 }
-    - { "20": 1, "50": 2 }
-    - { "20": 2, "50": 2 }
-  "[20, 100, 200]":
-    - { "20": 1, "100": 1, "200": 1 }
-    - { "20": 2, "100": 1, "200": 1 }
-    - { "20": 1, "100": 2, "200": 1 }
-    - { "20": 1, "100": 1, "200": 2 }
-    - { "20": 2, "100": 2, "200": 1 }
-    - { "20": 2, "100": 1, "200": 2 }
-    - { "20": 1, "100": 2, "200": 2 }
-    - { "20": 2, "100": 2, "200": 2 }
-  "[50, 100, 200]":
-    - { "50": 1, "100": 1, "200": 1 }
-    - { "50": 2, "100": 1, "200": 1 }
-    - { "50": 1, "100": 2, "200": 1 }
-    - { "50": 1, "100": 1, "200": 2 }
-    - { "50": 2, "100": 2, "200": 1 }
-    - { "50": 2, "100": 1, "200": 2 }
-    - { "50": 1, "100": 2, "200": 2 }
-    - { "50": 2, "100": 2, "200": 2 }
-
-# optional single sleeve runs, names include slope when entry_mode is slope
-single_sma_strategies:
-  - { name: "sma20_slope3in_price1out",  window: 20,  entry_mode: slope, entry_days: 3, exit_days: 1 }
-  - { name: "sma50_slope3in_price2out",  window: 50,  entry_mode: slope, entry_days: 3, exit_days: 2 }
-  - { name: "sma100_slope3in_price1out", window: 100, entry_mode: slope, entry_days: 3, exit_days: 1 }
-  - { name: "sma200_slope3in_price1out", window: 200, entry_mode: slope, entry_days: 3, exit_days: 1 }
+  "[100, 200]":
+    - { "100": 1, "200": 1 }
+    - { "100": 2, "200": 1 }
+    - { "100": 1, "200": 2 }
+    - { "100": 2, "200": 2 }
+  "[100, 150, 200]":
+    - { "100": 1, "150": 1, "200": 1 }
+    - { "100": 2, "150": 1, "200": 1 }
+    - { "100": 1, "150": 2, "200": 1 }
+    - { "100": 1, "150": 1, "200": 2 }
+    - { "100": 2, "150": 2, "200": 1 }
+    - { "100": 2, "150": 1, "200": 2 }
+    - { "100": 1, "150": 2, "200": 2 }
+    - { "100": 2, "150": 2, "200": 2 }
+  "[100, 200, 250]":
+    - { "100": 1, "200": 1, "250": 1 }
+    - { "100": 2, "200": 1, "250": 1 }
+    - { "100": 1, "200": 2, "250": 1 }
+    - { "100": 1, "200": 1, "250": 2 }
+    - { "100": 2, "200": 2, "250": 1 }
+    - { "100": 2, "200": 1, "250": 2 }
+    - { "100": 1, "200": 2, "250": 2 }
+    - { "100": 2, "200": 2, "250": 2 }
 
 include_baseline_buyhold: true
 write_per_year: false

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import os
-import itertools
 import yaml
 import numpy as np
 import pandas as pd
@@ -97,7 +96,6 @@ def _consec_true(mask, n):
     # n equals required consecutive True days
     # 1 means first True triggers, 2 means two consecutive True days, and so on
     if n <= 0:
-        # forbid old zero semantics
         return pd.Series(False, index=mask.index)
     cnt = 0
     out = []
@@ -107,35 +105,30 @@ def _consec_true(mask, n):
     return pd.Series(out, index=mask.index)
 
 
-def _entry_mask_slope(sma: pd.Series, d_days: int, eps_bps: float) -> pd.Series:
+def _entry_slope_mask(price_signal: pd.Series, slope_window: int, d_days: int, eps_bps: float):
     """
-    Build entry mask from SMA slope, require d_days consecutive positives.
-    eps_bps is the per day basis point threshold for rel slope:
-      rel = (sma - sma.shift(1)) / sma.shift(1)
+    Build the global slope mask from SMA(slope_window).
+    A day is positive when relative slope, (sma - sma.shift(1)) divided by sma.shift(1), is greater than eps.
+    Returns the consecutive mask and the SMA used for slope.
     """
-    prev = sma.shift(1)
-    rel = (sma - prev) / prev
+    sma_slope = _rolling_sma(price_signal, slope_window)
+    prev = sma_slope.shift(1)
+    rel = (sma_slope - prev) / prev
     thresh = float(eps_bps) / 10000.0
     pos = rel > thresh
-    return _consec_true(pos, d_days)
+    return _consec_true(pos, int(d_days)), sma_slope
 
 
-def sleeve_position(price_signal, window, entry_days, exit_days, entry_mode="price", eps_bps=0.5):
+def sleeve_position_classic(price_signal, window, entry_days, exit_days):
     """
-    Entry, when entry_mode equals price, require entry_days consecutive closes above SMA(window)
-           when entry_mode equals slope, require entry_days consecutive positive SMA slope days
-    Exit, require exit_days consecutive closes at or below SMA(window), unchanged
-    Signals trade in the next session, positions are shifted by one day
-    No trades before SMA forms
+    Classic entry, require entry_days consecutive closes above SMA(window).
+    Exit, require exit_days consecutive closes at or below SMA(window).
+    Signals trade in the next session, positions are shifted by one day.
+    No trades before SMA forms.
     """
     sma = _rolling_sma(price_signal, window)
     above = price_signal > sma
-
-    if str(entry_mode).lower() == "slope":
-        entry_ok = _entry_mask_slope(sma, int(entry_days), float(eps_bps))
-    else:
-        entry_ok = _consec_true(above, int(entry_days))
-
+    entry_ok = _consec_true(above, int(entry_days))
     exit_ok = _consec_true(~above, int(exit_days))
 
     idx = price_signal.index
@@ -155,14 +148,66 @@ def sleeve_position(price_signal, window, entry_days, exit_days, entry_mode="pri
     return pos
 
 
-def hybrid_position(price_signal, tier_windows, entry_days_by_window, exit_days_by_window,
-                    entry_mode="price", eps_bps=0.5):
+def sleeve_position_slope_entry(price_signal, window, exit_days, slope_mask, sma_slope_global):
+    """
+    Entry uses global slope mask, and requires price above SMA(window) on the trigger day.
+    Exit logic is unchanged, consecutive closes at or below SMA(window).
+    Trade next session, position series is shifted by one.
+    Warmup requires both SMA(window) and SMA(entry_slope_window) to exist.
+    """
+    sma_w = _rolling_sma(price_signal, window)
+    above_w = price_signal > sma_w
+
+    # Entry when global slope condition is satisfied and sleeve price is above its SMA today
+    entry_ok = slope_mask.reindex(price_signal.index).fillna(False) & above_w.reindex(price_signal.index).fillna(False)
+
+    # Exit when sleeve price is at or below its SMA for exit_days consecutive days
+    exit_ok = _consec_true(~above_w, int(exit_days))
+
+    idx = price_signal.index
+    pos = pd.Series(0, index=idx, dtype=int)
+    in_pos = 0
+    for i in range(len(idx)):
+        if in_pos == 1 and exit_ok.iat[i]:
+            in_pos = 0
+        elif in_pos == 0 and entry_ok.iat[i]:
+            in_pos = 1
+        pos.iat[i] = in_pos
+
+    pos = pos.shift(1).fillna(0).astype(int)
+
+    # Warmup, require both SMAs to exist, choose the later first valid date
+    fv_w = sma_w.dropna().index.min()
+    fv_slope = sma_slope_global.dropna().index.min()
+    if fv_w is not None and fv_slope is not None:
+        first_valid = max(fv_w, fv_slope)
+        pos = pos[pos.index >= first_valid]
+    elif fv_w is not None:
+        pos = pos[pos.index >= fv_w]
+    elif fv_slope is not None:
+        pos = pos[pos.index >= fv_slope]
+    return pos
+
+
+def hybrid_position_classic(price_signal, tier_windows, entry_days_by_window, exit_days_by_window):
     sleeves = []
     for w in tier_windows:
         e_days = int(entry_days_by_window.get(str(w), 3))
-        x_days = int(exit_days_by_window.get(str(w), 1))  # default 1
-        p = sleeve_position(price_signal, window=w, entry_days=e_days, exit_days=x_days,
-                            entry_mode=entry_mode, eps_bps=eps_bps)
+        x_days = int(exit_days_by_window.get(str(w), 1))
+        p = sleeve_position_classic(price_signal, window=w, entry_days=e_days, exit_days=x_days)
+        sleeves.append(p.reindex(price_signal.index).fillna(0))
+    pos = sum(sleeves) / len(sleeves)
+    return pos.clip(0.0, 1.0)
+
+
+def hybrid_position_slope_entry(price_signal, tier_windows, exit_days_by_window,
+                                slope_window, slope_days, eps_bps):
+    slope_mask, sma_slope_global = _entry_slope_mask(price_signal, slope_window, slope_days, eps_bps)
+    sleeves = []
+    for w in tier_windows:
+        x_days = int(exit_days_by_window.get(str(w), 1))
+        p = sleeve_position_slope_entry(price_signal, window=w, exit_days=x_days,
+                                        slope_mask=slope_mask, sma_slope_global=sma_slope_global)
         sleeves.append(p.reindex(price_signal.index).fillna(0))
     pos = sum(sleeves) / len(sleeves)
     return pos.clip(0.0, 1.0)
@@ -218,8 +263,8 @@ def per_year_stats(daily: pd.Series, pos: pd.Series, sharpe_rf_decimal: float, l
             "variant": label,
             "year": int(y),
             "cal_year_return": float(curve.iloc[-1] - 1.0),
-            "ann_return": ann,
-            "ann_vol": vol,
+            "ann_return": float(ann),
+            "ann_vol": float(vol),
             "sharpe": float(sharpe),
             "max_dd": float(mdd),
             "ulcer_index": float(ui),
@@ -258,11 +303,14 @@ def main():
     cash_rate = cfg.get("cash_rate_percent", 0.0) / 100.0
     sharpe_rf = cfg.get("sharpe_rf_percent", 0.0) / 100.0
 
-    # Entry mode and maps
-    entry_mode = str(cfg.get("entry_mode", "price")).lower()
-    entry_days_by_window_price = cfg.get("entry_days_by_window", {"100": 3, "200": 3})
-    entry_slope_days_by_window = cfg.get("entry_slope_days_by_window", {})
+    # Entry engine
+    entry_engine = str(cfg.get("entry_engine", "slope")).lower()  # "slope" or "classic"
+    entry_slope_window = int(cfg.get("entry_slope_window", 20))
+    entry_slope_days = int(cfg.get("entry_slope_days", 3))
     entry_slope_eps_bps = float(cfg.get("entry_slope_eps_bps", 0.5))
+
+    # Classic entry map kept for backward compatibility, unused in slope engine
+    entry_days_by_window = cfg.get("entry_days_by_window", {"100": 3, "200": 3, "221": 3})
 
     # Tier sets
     tier_sets = cfg.get("strategy_tier_sets") or [cfg.get("tier_windows", [100, 200])]
@@ -276,9 +324,8 @@ def main():
             'Example, exit_variants_by_set: {"[100, 200]": [{"100": 1, "200": 2}]}.'  # noqa: E501
         )
 
-    # single SMA sleeves now come from config
+    # single SMA sleeves come from config, exits required
     single_sma_specs = cfg.get("single_sma_strategies", [])
-    # validate single SMA specs
     for i, spec in enumerate(single_sma_specs):
         if "window" not in spec:
             raise ValueError(f"single_sma_strategies item {i} missing window")
@@ -294,7 +341,8 @@ def main():
 
     # Fetch data, extend back so SMAs warm up
     max_w = max(max(s) for s in tier_sets)
-    ext_start = (datetime.strptime(start, "%Y-%m-%d") - timedelta(days=max_w * 3 + 365)).strftime("%Y-%m-%d")
+    max_needed = max(max_w, entry_slope_window)
+    ext_start = (datetime.strptime(start, "%Y-%m-%d") - timedelta(days=max_needed * 3 + 365)).strftime("%Y-%m-%d")
     data = {}
     for t in tickers:
         sig, tr = fetch_series(t, ext_start, end)
@@ -330,6 +378,12 @@ def main():
     else:
         sample_windows = [(start, end)]
 
+    # Optional suffix to append to output file names, not touching row labels
+    name_suffix = cfg.get("output_name_suffix")
+    if not name_suffix:
+        name_suffix = "slope-entry" if entry_engine == "slope" else "3day-entry"
+    name_suffix = f"_{name_suffix}" if name_suffix else ""
+
     results = []
     per_year_rows = []
 
@@ -337,7 +391,7 @@ def main():
     for (run_start, run_end) in sample_windows:
         print(f"\nRunning window {run_start} to {run_end}")
 
-        # require exit variants per tier set from config
+        # hybrids
         for tier_windows in tier_sets:
             key = str(sorted(tier_windows))
             if key not in exit_variants_by_set:
@@ -358,42 +412,27 @@ def main():
                             "Use 2 for two consecutive closes below SMA then exit next session."
                         )
 
-            # choose the entry days map for this run
-            if entry_mode == "slope":
-                entry_days_map = {str(w): int(entry_slope_days_by_window.get(str(w),
-                                   int(entry_days_by_window_price.get(str(w), 3))))
-                                  for w in tier_windows}
-            else:
-                entry_days_map = {str(w): int(entry_days_by_window_price.get(str(w), 3))
-                                  for w in tier_windows}
-
-            # build entry label component
-            entry_values = [entry_days_map[str(w)] for w in tier_windows]
-            if len(set(entry_values)) == 1:
-                entry_label = f"entrySlope{entry_values[0]}" if entry_mode == "slope" else f"entryAbove{entry_values[0]}"
-            else:
-                if entry_mode == "slope":
-                    parts = [f"{w}_{entry_days_map[str(w)]}" for w in tier_windows]
-                    entry_label = "entrySlope" + "_".join(parts)
-                else:
-                    parts = [f"{w}_{entry_days_map[str(w)]}" for w in tier_windows]
-                    entry_label = "entryAbove" + "_".join(parts)
-
             for ex in exit_variants:
-                label = "set_" + str(sorted(tier_windows)) + "__" + entry_label + "__x" + "_".join([f"{w}_{int(ex[str(w)])}" for w in tier_windows])
+                # keep original label format in the CSV
+                label = "set_" + str(sorted(tier_windows)) + "__x" + "_".join([f"{w}_{int(ex[str(w)])}" for w in tier_windows])
                 hybrid_daily_all, hybrid_pos_all = {}, {}
 
                 for t in tickers:
                     sig_px = data[t]["sig"].loc[run_start:run_end]
                     tr_px = data[t]["tr"].loc[run_start:run_end]
-                    pos = hybrid_position(
-                        sig_px,
-                        tier_windows,
-                        entry_days_map,
-                        ex,
-                        entry_mode=entry_mode,
-                        eps_bps=entry_slope_eps_bps,
-                    )
+
+                    if entry_engine == "slope":
+                        pos = hybrid_position_slope_entry(
+                            sig_px,
+                            tier_windows,
+                            ex,
+                            slope_window=entry_slope_window,
+                            slope_days=entry_slope_days,
+                            eps_bps=entry_slope_eps_bps,
+                        )
+                    else:
+                        pos = hybrid_position_classic(sig_px, tier_windows, entry_days_by_window, ex)
+
                     daily = _daily_from_pos(pos, tr_px, daily_cash)
                     hybrid_daily_all[t], hybrid_pos_all[t] = daily, pos
 
@@ -412,31 +451,33 @@ def main():
                     blended_pos = sum(weights[t] * hybrid_pos_all[t] for t in tickers)
                     per_year_rows.append(per_year_stats(hybrid_daily, blended_pos, sharpe_rf, label))
 
-        # Single SMA sleeves, read from config, no defaults here
+        # Single SMA sleeves
         for spec in single_sma_specs:
             win = int(spec["window"])
-            # pick entry mode, default to global
-            spec_entry_mode = str(spec.get("entry_mode", entry_mode)).lower()
-            if spec_entry_mode == "slope":
-                e_in = int(spec.get("entry_days", entry_slope_days_by_window.get(str(win),
-                               entry_days_by_window_price.get(str(win), 3))))
-            else:
-                e_in = int(spec.get("entry_days", entry_days_by_window_price.get(str(win), 3)))
             x_out = int(spec["exit_days"])
             if x_out < 1:
                 raise ValueError(f"Single SMA exit_days must be at least 1 for window {win}")
-            default_name = (
-                f"sma{win}_slope{e_in}in_{x_out}out" if spec_entry_mode == "slope"
-                else f"sma{win}_{e_in}in_{x_out}out"
-            )
-            name = spec.get("name", default_name)
+            name = spec.get("name", f"sma{win}_in_{x_out}out")
 
             daily_mix = []
             for t in tickers:
                 sig_px = data[t]["sig"].loc[run_start:run_end]
                 tr_px = data[t]["tr"].loc[run_start:run_end]
-                pos = sleeve_position(sig_px, window=win, entry_days=e_in, exit_days=x_out,
-                                      entry_mode=spec_entry_mode, eps_bps=entry_slope_eps_bps)
+
+                if entry_engine == "slope":
+                    # slope mask is global, per asset per window block
+                    slope_mask, sma_slope_global = _entry_slope_mask(sig_px, entry_slope_window, entry_slope_days, entry_slope_eps_bps)
+                    pos = sleeve_position_slope_entry(
+                        sig_px,
+                        window=win,
+                        exit_days=x_out,
+                        slope_mask=slope_mask,
+                        sma_slope_global=sma_slope_global,
+                    )
+                else:
+                    e_in = int(spec.get("entry_days", entry_days_by_window.get(str(win), 3)))
+                    pos = sleeve_position_classic(sig_px, window=win, entry_days=e_in, exit_days=x_out)
+
                 daily = _daily_from_pos(pos, tr_px, daily_cash)
                 daily_mix.append(weights[t] * daily)
 
@@ -456,7 +497,7 @@ def main():
                 rets = data[t]["tr"].loc[run_start:run_end].pct_change().fillna(0.0)
                 bh_daily_all[t] = rets
 
-            bh_daily_all, bh_index = _align_intersection(bh_daily_all, 0.0)
+            bh_daily_all, _ = _align_intersection(bh_daily_all, 0.0)
             bh = sum(weights[t] * bh_daily_all[t] for t in tickers)
 
             m = metrics_from_returns(bh, sharpe_rf)
@@ -476,11 +517,11 @@ def main():
         "MaxDD", "UlcerIndex", "TotalMultiple", "TotalReturn"
     ]
     overall = overall[keep_cols]
-    overall.to_csv(os.path.join(outdir, "random_runs_summary.csv"), index=False)
+    overall.to_csv(os.path.join(outdir, f"random_runs_summary{name_suffix}.csv"), index=False)
 
     if write_per_year and per_year_rows:
         yr = pd.concat(per_year_rows, ignore_index=True)
-        yr.to_csv(os.path.join(outdir, "per_year_random.csv"), index=False)
+        yr.to_csv(os.path.join(outdir, f"per_year_random{name_suffix}.csv"), index=False)
 
     # Aggregation and wins logic
     is_baseline = overall["variant"].str.contains("baseline", case=False, regex=False)
@@ -584,9 +625,9 @@ def main():
 
     prefix = f"{ticker_label}-{years_label}-{samples_label}_"
 
-    # Save all outputs with prefix
-    avg_path = os.path.join(outdir, f"{prefix}random_runs_summary_averages.csv")
-    sum_path = os.path.join(outdir, f"{prefix}random_runs_summary.csv")
+    # Save all outputs with prefix, plus the chosen suffix
+    avg_path = os.path.join(outdir, f"{prefix}random_runs_summary_averages{name_suffix}.csv")
+    sum_path = os.path.join(outdir, f"{prefix}random_runs_summary{name_suffix}.csv")
     combined.to_csv(avg_path, index=False)
     overall.to_csv(sum_path, index=False)
 
@@ -595,7 +636,7 @@ def main():
 
     if write_per_year and per_year_rows:
         yr = pd.concat(per_year_rows, ignore_index=True)
-        per_year_path = os.path.join(outdir, f"{prefix}per_year_random.csv")
+        per_year_path = os.path.join(outdir, f"{prefix}per_year_random{name_suffix}.csv")
         yr.to_csv(per_year_path, index=False)
         print(f"Saved {per_year_path}")
 
