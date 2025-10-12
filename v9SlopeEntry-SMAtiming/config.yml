@@ -1,6 +1,6 @@
 # config.yml
-tickers: [IWF]
-weights: { IWF: 1.00 }
+tickers: [IVW]
+weights: { IVW: 1.00 }
 
 start: 2001-05-01
 end: 2025-10-01
@@ -70,7 +70,7 @@ write_per_year: false
 
 random_sampling:
   enabled: true
-  num_samples: 500
+  num_samples: 100
   min_years: 5
   max_years: 5
   # random_seed: 42
