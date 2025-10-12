@@ -241,14 +241,25 @@ def main():
     tier_sets = cfg.get("strategy_tier_sets") or [cfg.get("tier_windows", [100, 200])]
     entry_days_by_window = cfg.get("entry_days_by_window", {"100": 3, "200": 3, "221": 3})
 
-    # require explicit exit variants in the config
+    # require explicit exit variants in the config for hybrid sets
     exit_variants_by_set = cfg.get("exit_variants_by_set")
     if not exit_variants_by_set:
         raise ValueError(
             "exit_variants_by_set is required in config.yml. "
-            "Provide exit settings as integers of at least 1, for example, "
-            'exit_variants_by_set: {"[100, 200]": [{"100": 1, "200": 2}, {"100": 2, "200": 2}]}.'
+            "Provide exit settings as integers of at least 1. "
+            'Example, exit_variants_by_set: {"[100, 200]": [{"100": 1, "200": 2}]}.'
         )
+
+    # single SMA sleeves now come from config
+    single_sma_specs = cfg.get("single_sma_strategies", [])
+    # validate single SMA specs
+    for i, spec in enumerate(single_sma_specs):
+        if "window" not in spec:
+            raise ValueError(f"single_sma_strategies item {i} missing window")
+        if "exit_days" not in spec:
+            raise ValueError(f"single_sma_strategies item {i} missing exit_days")
+        if int(spec["exit_days"]) < 1:
+            raise ValueError(f"single_sma_strategies item {i} exit_days must be at least 1")
 
     write_per_year = bool(cfg.get("write_per_year", False))
     include_baseline_buyhold = bool(cfg.get("include_baseline_buyhold", True))
@@ -347,13 +358,15 @@ def main():
                     blended_pos = sum(weights[t] * hybrid_pos_all[t] for t in tickers)
                     per_year_rows.append(per_year_stats(hybrid_daily, blended_pos, sharpe_rf, label))
 
-        # Single SMA sleeves, updated to 1 and 2 exits only
-        for name, win, e_in, x_out in [
-            ("sma100_3in_1out", 100, 3, 1),
-            ("sma100_3in_2out", 100, 3, 2),
-            ("sma200_3in_1out", 200, 3, 1),
-            ("sma200_3in_2out", 200, 3, 2),
-        ]:
+        # Single SMA sleeves, read from config, no defaults here
+        for spec in single_sma_specs:
+            win = int(spec["window"])
+            e_in = int(spec.get("entry_days", entry_days_by_window.get(str(win), 3)))
+            x_out = int(spec["exit_days"])
+            if x_out < 1:
+                raise ValueError(f"Single SMA exit_days must be at least 1 for window {win}")
+            name = spec.get("name", f"sma{win}_{e_in}in_{x_out}out")
+
             daily_mix = []
             for t in tickers:
                 sig_px = data[t]["sig"].loc[run_start:run_end]
@@ -455,7 +468,6 @@ def main():
     sdf = overall.copy()
     is_base_diag = sdf["variant"].str.contains("baseline", case=False, regex=False)
     strat_df = sdf[~is_base_diag].copy()
-    base_df = sdf.isin({"variant": ["baseline_buyhold"]})
     base_df = sdf[is_base_diag].copy()
 
     base_sharpe = base_df.set_index("window")["Sharpe"].to_dict()

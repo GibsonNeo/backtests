@@ -8,12 +8,22 @@ outdir: outputs_exit_grid
 cash_rate_percent: 3.0
 sharpe_rf_percent: 3.0
 
-# Entry delays per SMA (applies to sleeves and single-SMA strategies below)
 entry_days_by_window: { "100": 3, "150": 3, "200": 3, "250": 3 }
 
-#Singleplaceholder
+single_sma_strategies:
+  - { name: "sma100_3in_1out", window: 100, entry_days: 3, exit_days: 1 }
+  - { name: "sma100_3in_2out", window: 100, entry_days: 3, exit_days: 2 }
+  - { name: "sma100_3in_3out", window: 100, entry_days: 3, exit_days: 3 }
+  - { name: "sma150_3in_1out", window: 150, entry_days: 3, exit_days: 1 }
+  - { name: "sma150_3in_2out", window: 150, entry_days: 3, exit_days: 2 }
+  - { name: "sma150_3in_3out", window: 150, entry_days: 3, exit_days: 3 }
+  - { name: "sma200_3in_1out", window: 200, entry_days: 3, exit_days: 1 }
+  - { name: "sma200_3in_2out", window: 200, entry_days: 3, exit_days: 2 }
+  - { name: "sma200_3in_3out", window: 200, entry_days: 3, exit_days: 3 }
+  - { name: "sma250_3in_1out", window: 250, entry_days: 3, exit_days: 1 }
+  - { name: "sma250_3in_2out", window: 250, entry_days: 3, exit_days: 2 }
+  - { name: "sma250_3in_3out", window: 250, entry_days: 3, exit_days: 3 }
 
-# Tier sets to evaluate in the same run
 strategy_tier_sets:
   - [100, 200]
   - [100, 150, 200]
@@ -44,9 +54,7 @@ exit_variants_by_set:
     - { "100": 1, "200": 2, "250": 2 }
     - { "100": 2, "200": 2, "250": 2 }
 
-# Baselines
 include_baseline_buyhold: true
-
 write_per_year: false
 
 random_sampling:
@@ -54,3 +62,4 @@ random_sampling:
   num_samples: 10
   min_years: 5
   max_years: 5
+  # random_seed: 42    # optional for reproducibility
