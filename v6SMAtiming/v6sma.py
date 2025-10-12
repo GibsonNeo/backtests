@@ -208,21 +208,37 @@ def main():
         tr = tr[tr.index >= pd.to_datetime(start)]
         data[t] = dict(sig=sig, tr=tr)
 
-    # Random sampling
+        # ---- Random sampling ----
     rand_cfg = cfg.get("random_sampling", {})
     if rand_cfg.get("enabled", False):
         num_samples = int(rand_cfg.get("num_samples", 20))
         min_years = int(rand_cfg.get("min_years", 5))
         max_years = int(rand_cfg.get("max_years", 10))
+
         start_dt = pd.to_datetime(start)
         end_dt = pd.to_datetime(end)
         all_days = pd.bdate_range(start_dt, end_dt)
+
         sample_windows = []
         for _ in range(num_samples):
+            # pick a random start date ensuring at least min_years of data remain
             s = np.random.choice(all_days[:-TRADING_DAYS * min_years])
             s = pd.Timestamp(s)
-            random_days = int(np.random.randint(min_years * 365, max_years * 365))
-            e = min(s + timedelta(days=random_days), end_dt)
+
+            # if min == max, fix exact duration (e.g., always 3 years)
+            if min_years == max_years:
+                window_days = int(min_years * 365)
+            else:
+                window_days = int(np.random.randint(min_years * 365, max_years * 365))
+
+            e = s + timedelta(days=window_days)
+
+            # ensure window stays inside available data
+            if e > end_dt:
+                s = end_dt - timedelta(days=window_days)
+                e = end_dt
+
+            # only add if full window fits
             if (e - s).days >= min_years * 365:
                 sample_windows.append((s.strftime("%Y-%m-%d"), e.strftime("%Y-%m-%d")))
     else:
@@ -230,6 +246,7 @@ def main():
 
     results = []
     per_year_rows = []
+
 
     def _daily_from_pos(pos: pd.Series, tr_px: pd.Series) -> pd.Series:
         asset_rets = tr_px.pct_change().fillna(0.0)

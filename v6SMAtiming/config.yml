@@ -1,7 +1,7 @@
-tickers: [QQQ]
-weights: { QQQ: 1.00 }
+tickers: [SPMO]
+weights: { SPMO: 1.00 }
 
-start: 2000-04-01
+start: 2016-10-01
 end: 2025-10-01
 outdir: outputs_exit_grid
 
@@ -11,10 +11,11 @@ sharpe_rf_percent: 3.0
 # Tier sets to evaluate in the same run
 strategy_tier_sets:
   - [100, 200]
-  - [100, 200, 221]
+  - [100, 150, 200]
+  - [100, 200, 250]
 
 # Entry delays per SMA (applies to sleeves and single-SMA strategies below)
-entry_days_by_window: { "100": 3, "200": 3, "221": 3 }
+entry_days_by_window: { "100": 3, "150": 3, "200": 3, "250": 3 }
 
 # Auto-generate all 0/1 exit mixes per tier set
 auto_binary_exit_grid: true
@@ -37,4 +38,4 @@ random_sampling:
   enabled: true
   num_samples: 500
   min_years: 3
-  max_years: 25
+  max_years: 3
