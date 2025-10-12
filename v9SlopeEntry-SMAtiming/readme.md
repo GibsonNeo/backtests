@@ -1,0 +1,2 @@
+Instead of 3 day set entry after a rise above the SMA, we will be using different slope lengths and testing those against the same day beased exits:
+20,50,100,200 slopes all with default 3 day slope up.
