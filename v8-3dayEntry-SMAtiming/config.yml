@@ -1,5 +1,5 @@
-tickers: [IVW]
-weights: { IVW: 1.00 }
+tickers: [QQQ]
+weights: { QQQ: 1.00 }
 
 start: 2001-05-01
 end: 2025-10-01
@@ -62,4 +62,4 @@ random_sampling:
   num_samples: 100
   min_years: 5
   max_years: 5
-  # random_seed: 42    # optional for reproducibility
+  random_seed: 35    # optional for reproducibility

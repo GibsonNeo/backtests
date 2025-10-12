@@ -350,30 +350,42 @@ def main():
         tr = tr[tr.index >= pd.to_datetime(start)]
         data[t] = dict(sig=sig, tr=tr)
 
-    # Random sampling windows
+    # Random sampling windows, reproducible with optional seed
     rand_cfg = cfg.get("random_sampling", {})
     if rand_cfg.get("enabled", False):
         num_samples = int(rand_cfg.get("num_samples", 20))
         min_years = int(rand_cfg.get("min_years", 5))
         max_years = int(rand_cfg.get("max_years", 10))
+        seed_val = rand_cfg.get("random_seed", None)
+        rng = np.random.default_rng(int(seed_val)) if seed_val is not None else np.random.default_rng()
 
         start_dt = pd.to_datetime(start)
         end_dt = pd.to_datetime(end)
         all_days = pd.bdate_range(start_dt, end_dt)
 
+        # guard against too short history
+        if len(all_days) <= TRADING_DAYS * min_years:
+            raise ValueError("History is too short for requested random sampling parameters")
+
         sample_windows = []
+        min_span_days = int(min_years * 365)
         for _ in range(num_samples):
-            s = np.random.choice(all_days[:-TRADING_DAYS * min_years])
+            # choose a start such that min_years can fit
+            valid_end = len(all_days) - TRADING_DAYS * min_years
+            s = rng.choice(all_days[:valid_end])
             s = pd.Timestamp(s)
+
             if min_years == max_years:
                 window_days = int(min_years * 365)
             else:
-                window_days = int(np.random.randint(min_years * 365, max_years * 365))
+                window_days = int(rng.integers(min_years * 365, max_years * 365))
+
             e = s + timedelta(days=window_days)
             if e > end_dt:
                 s = end_dt - timedelta(days=window_days)
                 e = end_dt
-            if (e - s).days >= min_years * 365:
+
+            if (e - s).days >= min_span_days:
                 sample_windows.append((s.strftime("%Y-%m-%d"), e.strftime("%Y-%m-%d")))
     else:
         sample_windows = [(start, end)]
