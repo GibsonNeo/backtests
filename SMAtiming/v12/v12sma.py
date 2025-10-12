@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import os
-import itertools
 import yaml
 import numpy as np
 import pandas as pd
@@ -162,7 +161,7 @@ def _daily_from_pos(pos: pd.Series, tr_px: pd.Series, daily_cash: float) -> pd.S
     return pos * asset_rets + (1 - pos) * daily_cash
 
 
-def _align_intersection(series_dict: dict, fill_value: float) -> dict:
+def _align_intersection(series_dict: dict, fill_value: float):
     """
     Align by intersection and fill any residual missing with provided fill value.
     For strategy daily returns, pass daily_cash. For positions, pass 0.0.
@@ -280,7 +279,7 @@ def main():
         tr = tr[tr.index >= pd.to_datetime(start)]
         data[t] = dict(sig=sig, tr=tr)
 
-        # Random sampling windows, or single full span when disabled
+    # Random sampling windows, or single full span when disabled
     rand_cfg = cfg.get("random_sampling", {})
     if rand_cfg.get("enabled", False):
         num_samples = int(rand_cfg.get("num_samples", 20))
@@ -319,8 +318,8 @@ def main():
         # Disabled sampling uses one full range window
         sample_windows = [(start, end)]
 
-
-    results = []
+    results = []            # blended portfolio rows
+    results_per_ticker = [] # per ticker rows
     per_year_rows = []
 
     # ---- main loop ----
@@ -370,6 +369,14 @@ def main():
                 m["window"] = f"{run_start}_{run_end}"
                 results.append(m)
 
+                # per ticker metrics for the same hybrid variant
+                for tt in tickers:
+                    m_t = metrics_from_returns(hybrid_daily_all[tt], sharpe_rf)
+                    m_t["variant"] = label
+                    m_t["window"] = f"{run_start}_{run_end}"
+                    m_t["ticker"] = tt
+                    results_per_ticker.append(m_t)
+
                 if write_per_year:
                     blended_pos = sum(weights[t] * hybrid_pos_all[t] for t in tickers)
                     per_year_rows.append(per_year_stats(hybrid_daily, blended_pos, sharpe_rf, label))
@@ -384,11 +391,13 @@ def main():
             name = spec.get("name", f"sma{win}_{e_in}in_{x_out}out")
 
             daily_mix = []
+            per_ticker_daily_cache = {}  # reuse for per ticker rows
             for t in tickers:
                 sig_px = data[t]["sig"].loc[run_start:run_end]
                 tr_px = data[t]["tr"].loc[run_start:run_end]
                 pos = sleeve_position(sig_px, window=win, entry_days=e_in, exit_days=x_out)
                 daily = _daily_from_pos(pos, tr_px, daily_cash)
+                per_ticker_daily_cache[t] = daily
                 daily_mix.append(weights[t] * daily)
 
             tmp = {str(i): s for i, s in enumerate(daily_mix)}
@@ -399,6 +408,14 @@ def main():
             m["variant"] = name
             m["window"] = f"{run_start}_{run_end}"
             results.append(m)
+
+            # per ticker metrics for this single SMA variant
+            for tt in tickers:
+                m_t = metrics_from_returns(per_ticker_daily_cache[tt], sharpe_rf)
+                m_t["variant"] = name
+                m_t["window"] = f"{run_start}_{run_end}"
+                m_t["ticker"] = tt
+                results_per_ticker.append(m_t)
 
         # Baseline buy and hold
         if include_baseline_buyhold:
@@ -415,11 +432,20 @@ def main():
             m["window"] = f"{run_start}_{run_end}"
             results.append(m)
 
+            # per ticker baseline rows
+            for tt in tickers:
+                m_b = metrics_from_returns(bh_daily_all[tt], sharpe_rf)
+                m_b["variant"] = "baseline_buyhold"
+                m_b["window"] = f"{run_start}_{run_end}"
+                m_b["ticker"] = tt
+                results_per_ticker.append(m_b)
+
             if write_per_year:
                 per_year_rows.append(per_year_stats(bh, pd.Series(1.0, index=bh.index), sharpe_rf, "baseline_buyhold"))
 
     # Collate results
-    overall = pd.DataFrame(results)
+    overall = pd.DataFrame(results)                 # blended portfolio
+    overall_t = pd.DataFrame(results_per_ticker)    # per ticker
 
     # keep useful columns
     keep_cols = [
@@ -433,7 +459,7 @@ def main():
         yr = pd.concat(per_year_rows, ignore_index=True)
         yr.to_csv(os.path.join(outdir, "per_year_random.csv"), index=False)
 
-    # Aggregation and wins logic
+    # Aggregation and wins logic for blended portfolio
     is_baseline = overall["variant"].str.contains("baseline", case=False, regex=False)
     strategies = overall[~is_baseline].copy()
     baselines = overall[is_baseline].copy()
@@ -536,10 +562,9 @@ def main():
 
     prefix = f"{ticker_label}-{years_label}-{samples_label}_{entry_tag}_"
 
-    # Save all outputs with prefix
+    # Save blended outputs with prefix
     avg_path = os.path.join(outdir, f"{prefix}random_runs_summary_averages.csv")
     sum_path = os.path.join(outdir, f"{prefix}random_runs_summary.csv")
-        # Write combined averages with baseline, unchanged
     combined.to_csv(avg_path, index=False)
     overall.to_csv(sum_path, index=False)
 
@@ -561,6 +586,88 @@ def main():
     print(f"Saved {sum_path}")
     print(f"Saved {random_like_path}")
 
+    # -------- per ticker summaries and rollup --------
+    if not overall_t.empty:
+        # keep useful columns, add ticker
+        keep_cols_t = [
+            "window", "ticker", "variant", "CAGR", "AnnReturn", "AnnVol", "Sharpe", "Sharpe_noRF",
+            "MaxDD", "UlcerIndex", "TotalMultiple", "TotalReturn"
+        ]
+        overall_t = overall_t[keep_cols_t]
+        per_ticker_sum_path = os.path.join(outdir, f"{prefix}per_ticker_random_runs_summary.csv")
+        overall_t.to_csv(per_ticker_sum_path, index=False)
+
+        # split strategies and baselines per ticker
+        is_base_t = overall_t["variant"].str.contains("baseline", case=False, regex=False)
+        strategies_t = overall_t[~is_base_t].copy()
+        baselines_t = overall_t[is_base_t].copy()
+
+        # baseline per ticker per window maps
+        base_sharpe_map = baselines_t.set_index(["ticker", "window"])["Sharpe"].to_dict()
+        base_cagr_map   = baselines_t.set_index(["ticker", "window"])["CAGR"].to_dict()
+
+        # wins per ticker
+        total_windows_t = len(overall_t["window"].unique())
+        strategies_t = strategies_t.assign(
+            sharpe_beats_baseline = strategies_t.apply(
+                lambda r: float(r["Sharpe"] > base_sharpe_map.get((r["ticker"], r["window"]), np.nan)), axis=1
+            ),
+            cagr_beats_baseline   = strategies_t.apply(
+                lambda r: float(r["CAGR"]  > base_cagr_map.get((r["ticker"], r["window"]), np.nan)), axis=1
+            ),
+        )
+
+        # average by ticker and variant
+        avg_by_ticker = (
+            strategies_t.groupby(["ticker", "variant"], as_index=False)[metrics_cols]
+            .mean()
+        )
+        sharpe_wins_t = strategies_t.groupby(["ticker", "variant"])["sharpe_beats_baseline"].sum().rename("sharpe_wins").reset_index()
+        cagr_wins_t   = strategies_t.groupby(["ticker", "variant"])["cagr_beats_baseline"].sum().rename("cagr_wins").reset_index()
+
+        per_ticker_avg = avg_by_ticker.merge(sharpe_wins_t, on=["ticker", "variant"], how="left")
+        per_ticker_avg = per_ticker_avg.merge(cagr_wins_t, on=["ticker", "variant"], how="left")
+        per_ticker_avg = per_ticker_avg.fillna({"sharpe_wins": 0.0, "cagr_wins": 0.0})
+        per_ticker_avg["sharpe_win_share"] = per_ticker_avg["sharpe_wins"] / total_windows_t
+        per_ticker_avg["cagr_win_share"]   = per_ticker_avg["cagr_wins"]   / total_windows_t
+
+        per_ticker_avg_path = os.path.join(outdir, f"{prefix}per_ticker_random_runs_summary_averages.csv")
+        per_ticker_avg.to_csv(per_ticker_avg_path, index=False)
+
+        # rollup across tickers, equal weight across tickers
+        rollup_metrics = (
+            per_ticker_avg.groupby("variant", as_index=False)[metrics_cols]
+            .mean()
+        )
+        rollup_extra = (
+            per_ticker_avg.groupby("variant", as_index=False)[
+                ["sharpe_win_share", "cagr_win_share"]
+            ].mean()
+        )
+        rollup = rollup_metrics.merge(rollup_extra, on="variant", how="left")
+
+        # baseline rollup for reference
+        base_avg_t = (
+            baselines_t.groupby(["ticker", "variant"], as_index=False)[metrics_cols]
+            .mean()
+        )
+        base_rollup = base_avg_t.groupby("variant", as_index=False)[metrics_cols].mean()
+
+        rollup_combined = pd.concat(
+            [
+                rollup.assign(group="strategy_rollup"),
+                base_rollup.assign(group="baseline_rollup"),
+            ],
+            ignore_index=True,
+            sort=False,
+        )
+
+        rollup_avg_path = os.path.join(outdir, f"{prefix}rollup_across_tickers_averages.csv")
+        rollup_combined.to_csv(rollup_avg_path, index=False)
+
+        print(f"Saved {per_ticker_sum_path}")
+        print(f"Saved {per_ticker_avg_path}")
+        print(f"Saved {rollup_avg_path}")
 
     if write_per_year and per_year_rows:
         yr = pd.concat(per_year_rows, ignore_index=True)

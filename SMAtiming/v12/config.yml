@@ -1,6 +1,6 @@
 
-tickers: [IVW]
-weights: { IVW: 1.00 }
+tickers: [IVW, IWF, QQQ, SPY]
+#weights: { IVW: 1.00 }
 
 start: 2001-05-01
 end: 2025-10-01
