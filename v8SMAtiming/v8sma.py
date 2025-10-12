@@ -95,8 +95,11 @@ def _rolling_sma(x, w):
 
 
 def _consec_true(mask, n):
+    # n equals required consecutive True days
+    # 1 means first True triggers, 2 means two consecutive True days, and so on
     if n <= 0:
-        return pd.Series(True, index=mask.index)
+        # forbid old zero semantics
+        return pd.Series(False, index=mask.index)
     cnt = 0
     out = []
     for v in mask.values:
@@ -109,7 +112,7 @@ def sleeve_position(price_signal, window, entry_days, exit_days):
     """
     Entry, require entry_days consecutive closes above SMA(window)
     Exit, require exit_days consecutive closes at or below SMA(window)
-    Signals trade next session by shifting position by one day
+    Signals trade in the next session, positions are shifted by one day
     No trades before SMA forms
     """
     sma = _rolling_sma(price_signal, window)
@@ -138,7 +141,7 @@ def hybrid_position(price_signal, tier_windows, entry_days_by_window, exit_days_
     sleeves = []
     for w in tier_windows:
         e_days = int(entry_days_by_window.get(str(w), 3))
-        x_days = int(exit_days_by_window.get(str(w), 0))
+        x_days = int(exit_days_by_window.get(str(w), 1))  # default 1, first close below exits next session
         p = sleeve_position(price_signal, window=w, entry_days=e_days, exit_days=x_days)
         sleeves.append(p.reindex(price_signal.index).fillna(0))
     pos = sum(sleeves) / len(sleeves)
@@ -237,8 +240,16 @@ def main():
 
     tier_sets = cfg.get("strategy_tier_sets") or [cfg.get("tier_windows", [100, 200])]
     entry_days_by_window = cfg.get("entry_days_by_window", {"100": 3, "200": 3, "221": 3})
-    auto_binary_exit_grid = bool(cfg.get("auto_binary_exit_grid", True))
+
+    # require explicit exit variants in the config
     exit_variants_by_set = cfg.get("exit_variants_by_set")
+    if not exit_variants_by_set:
+        raise ValueError(
+            "exit_variants_by_set is required in config.yml. "
+            "Provide exit settings as integers of at least 1, for example, "
+            'exit_variants_by_set: {"[100, 200]": [{"100": 1, "200": 2}, {"100": 2, "200": 2}]}.'
+        )
+
     write_per_year = bool(cfg.get("write_per_year", False))
     include_baseline_buyhold = bool(cfg.get("include_baseline_buyhold", True))
     daily_cash = cash_rate / TRADING_DAYS
@@ -267,23 +278,16 @@ def main():
 
         sample_windows = []
         for _ in range(num_samples):
-            # pick a start date ensuring at least min_years of data remain
             s = np.random.choice(all_days[:-TRADING_DAYS * min_years])
             s = pd.Timestamp(s)
-
-            # fixed duration when min equals max
             if min_years == max_years:
                 window_days = int(min_years * 365)
             else:
                 window_days = int(np.random.randint(min_years * 365, max_years * 365))
-
             e = s + timedelta(days=window_days)
-
-            # keep window within bounds
             if e > end_dt:
                 s = end_dt - timedelta(days=window_days)
                 e = end_dt
-
             if (e - s).days >= min_years * 365:
                 sample_windows.append((s.strftime("%Y-%m-%d"), e.strftime("%Y-%m-%d")))
     else:
@@ -296,18 +300,26 @@ def main():
     for (run_start, run_end) in sample_windows:
         print(f"\nRunning window {run_start} to {run_end}")
 
-        # dynamic set of exit mixes per tier set
+        # require exit variants per tier set from config
         for tier_windows in tier_sets:
-            if auto_binary_exit_grid and not exit_variants_by_set:
-                vals = [0, 1]
-                combos = list(itertools.product(vals, repeat=len(tier_windows)))
-                exit_variants = [{str(w): combo[i] for i, w in enumerate(tier_windows)} for combo in combos]
-            else:
-                key = str(sorted(tier_windows))
-                if exit_variants_by_set and key in exit_variants_by_set:
-                    exit_variants = exit_variants_by_set[key]
-                else:
-                    raise ValueError(f"No exit variants provided for tier set {tier_windows}")
+            key = str(sorted(tier_windows))
+            if key not in exit_variants_by_set:
+                raise ValueError(
+                    f"No exit variants provided for tier set {tier_windows}. "
+                    f"Add an entry under exit_variants_by_set for key {key}."
+                )
+            exit_variants = exit_variants_by_set[key]
+
+            # validate exits are integers and at least 1
+            for ex in exit_variants:
+                for w in tier_windows:
+                    val = int(ex.get(str(w), 1))
+                    if val < 1:
+                        raise ValueError(
+                            f"Exit setting for window {w} must be at least 1, got {val}. "
+                            "Use 1 for first close below SMA then exit next session, "
+                            "use 2 for two consecutive closes below SMA then exit next session."
+                        )
 
             for ex in exit_variants:
                 label = "set_" + str(sorted(tier_windows)) + "__x" + "_".join([f"{w}_{int(ex[str(w)])}" for w in tier_windows])
@@ -322,11 +334,9 @@ def main():
 
                 # align by intersection and treat any residual missing returns as cash
                 hybrid_daily_all, common_index = _align_intersection(hybrid_daily_all, daily_cash)
-                # positions aligned to the same common index
                 for t in tickers:
                     hybrid_pos_all[t] = hybrid_pos_all[t].reindex(common_index).fillna(0.0)
 
-                # blend across tickers
                 hybrid_daily = sum(weights[t] * hybrid_daily_all[t] for t in tickers)
                 m = metrics_from_returns(hybrid_daily, sharpe_rf)
                 m["variant"] = label
@@ -337,12 +347,12 @@ def main():
                     blended_pos = sum(weights[t] * hybrid_pos_all[t] for t in tickers)
                     per_year_rows.append(per_year_stats(hybrid_daily, blended_pos, sharpe_rf, label))
 
-        # Single SMA sleeves
+        # Single SMA sleeves, updated to 1 and 2 exits only
         for name, win, e_in, x_out in [
             ("sma100_3in_1out", 100, 3, 1),
-            ("sma100_3in_0out", 100, 3, 0),
+            ("sma100_3in_2out", 100, 3, 2),
             ("sma200_3in_1out", 200, 3, 1),
-            ("sma200_3in_0out", 200, 3, 0),
+            ("sma200_3in_2out", 200, 3, 2),
         ]:
             daily_mix = []
             for t in tickers:
@@ -352,7 +362,6 @@ def main():
                 daily = _daily_from_pos(pos, tr_px, daily_cash)
                 daily_mix.append(weights[t] * daily)
 
-            # intersection of the daily series
             tmp = {str(i): s for i, s in enumerate(daily_mix)}
             tmp_aligned, _ = _align_intersection(tmp, daily_cash)
             daily_sum = sum(tmp_aligned[k] for k in tmp_aligned.keys())
@@ -369,7 +378,6 @@ def main():
                 rets = data[t]["tr"].loc[run_start:run_end].pct_change().fillna(0.0)
                 bh_daily_all[t] = rets
 
-            # align baseline by intersection and fill missing with zero, since no trading day implies no return
             bh_daily_all, bh_index = _align_intersection(bh_daily_all, 0.0)
             bh = sum(weights[t] * bh_daily_all[t] for t in tickers)
 
@@ -417,7 +425,7 @@ def main():
     baseline_sharpe_by_window = baselines.set_index("window")["Sharpe"].to_dict()
     baseline_cagr_by_window = baselines.set_index("window")["CAGR"].to_dict()
 
-    # New win logic, award one point whenever a strategy beats the baseline for that window
+    # Award one point whenever a strategy beats the baseline for that window
     total_windows = len(overall["window"].unique())
     strategies = strategies.assign(
         sharpe_beats_baseline = strategies.apply(lambda r: float(r["Sharpe"] > baseline_sharpe_by_window.get(r["window"], np.nan)), axis=1),
@@ -443,10 +451,11 @@ def main():
     avg_plus_wins["sharpe_win_share"] = avg_plus_wins["sharpe_wins"] / total_windows
     avg_plus_wins["cagr_win_share"] = avg_plus_wins["cagr_wins"] / total_windows
 
-    # Diagnostics versus baseline, per variant, merged into the averages as requested
+    # Diagnostics versus baseline, per variant
     sdf = overall.copy()
     is_base_diag = sdf["variant"].str.contains("baseline", case=False, regex=False)
     strat_df = sdf[~is_base_diag].copy()
+    base_df = sdf.isin({"variant": ["baseline_buyhold"]})
     base_df = sdf[is_base_diag].copy()
 
     base_sharpe = base_df.set_index("window")["Sharpe"].to_dict()
