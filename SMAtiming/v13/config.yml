@@ -1,0 +1,76 @@
+hybrid20_sma:
+  enabled: true
+  name: 200SMA_3in_2out_hybrid20SMA
+  entry_days: 3
+  long_window: 200
+  exit_days_long: 2
+  short_window: 20
+  exit_days_short: 1
+  
+
+tickers: [IVW,IWF,QQQ,SPY]
+#weights: { IVW: 1.00 }
+
+start: 2001-05-01
+end: 2025-10-01
+outdir: outputs_exit_grid
+
+cash_rate_percent: 0
+sharpe_rf_percent: 0
+
+default_entry_days: 3
+entry_days_by_window: { "100": 3, "150": 3, "200": 3, "250": 3 }
+
+single_sma_strategies:
+  - { name: "sma100_3in_1out", window: 100, entry_days: 3, exit_days: 1 }
+  - { name: "sma100_3in_2out", window: 100, entry_days: 3, exit_days: 2 }
+  - { name: "sma100_3in_3out", window: 100, entry_days: 3, exit_days: 3 }
+  - { name: "sma150_3in_1out", window: 150, entry_days: 3, exit_days: 1 }
+  - { name: "sma150_3in_2out", window: 150, entry_days: 3, exit_days: 2 }
+  - { name: "sma150_3in_3out", window: 150, entry_days: 3, exit_days: 3 }
+  - { name: "sma200_3in_1out", window: 200, entry_days: 3, exit_days: 1 }
+  - { name: "sma200_3in_2out", window: 200, entry_days: 3, exit_days: 2 }
+  - { name: "sma200_3in_3out", window: 200, entry_days: 3, exit_days: 3 }
+  - { name: "sma250_3in_1out", window: 250, entry_days: 3, exit_days: 1 }
+  - { name: "sma250_3in_2out", window: 250, entry_days: 3, exit_days: 2 }
+  - { name: "sma250_3in_3out", window: 250, entry_days: 3, exit_days: 3 }
+
+strategy_tier_sets:
+  - [100, 200]
+  - [100, 150, 200]
+  - [100, 200, 250]
+
+exit_variants_by_set:
+  "[100, 200]":
+    - { "100": 1, "200": 1 }
+    - { "100": 2, "200": 1 }
+    - { "100": 1, "200": 2 }
+    - { "100": 2, "200": 2 }
+  "[100, 150, 200]":
+    - { "100": 1, "150": 1, "200": 1 }
+    - { "100": 2, "150": 1, "200": 1 }
+    - { "100": 1, "150": 2, "200": 1 }
+    - { "100": 1, "150": 1, "200": 2 }
+    - { "100": 2, "150": 2, "200": 1 }
+    - { "100": 2, "150": 1, "200": 2 }
+    - { "100": 1, "150": 2, "200": 2 }
+    - { "100": 2, "150": 2, "200": 2 }
+  "[100, 200, 250]":
+    - { "100": 1, "200": 1, "250": 1 }
+    - { "100": 2, "200": 1, "250": 1 }
+    - { "100": 1, "200": 2, "250": 1 }
+    - { "100": 1, "200": 1, "250": 2 }
+    - { "100": 2, "200": 2, "250": 1 }
+    - { "100": 2, "200": 1, "250": 2 }
+    - { "100": 1, "200": 2, "250": 2 }
+    - { "100": 2, "200": 2, "250": 2 }
+
+include_baseline_buyhold: true
+write_per_year: false
+
+random_sampling:
+  enabled: true
+  num_samples: 100
+  min_years: 5
+  max_years: 5
+  random_seed: 40    # optional for reproducibility

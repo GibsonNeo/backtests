@@ -1,0 +1,2 @@
+Going to bring in and test new strat.  
+200SMA_3in_2out but with a twist - Entry can happen if 20SMA is below 200SMA and price is above 20SMA for 3 days and slope of 20SMA is up for 3 days. If close is ever at or below the 20SMA though we exit the trade.
