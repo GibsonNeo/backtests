@@ -34,8 +34,8 @@ include_baseline_buyhold: true
 write_per_year: false
 
 random_sampling:
-  enabled: false
-  num_samples: 5
+  enabled: true
+  num_samples: 50
   min_years: 5
   max_years: 5
   random_seed: 40
