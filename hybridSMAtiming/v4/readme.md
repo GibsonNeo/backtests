@@ -1,0 +1,1 @@
+Honing in on the best strat.  Removed the cooldown logic.
