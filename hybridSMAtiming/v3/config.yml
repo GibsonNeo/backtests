@@ -8,14 +8,14 @@ hybrid20_defaults:
   exit_days_short: 1
 
 hybrid20_grids:
-  long_windows: [100, 150, 200, 250]
-  short_windows: [10, 15, 20, 30, 50]
-  cooldown_days: [0, 1, 2]
+  long_windows: [150, 200, 250]
+  short_windows: [10, 15, 20, 30]
+  #cooldown_days: [0, 1, 2]
 
   entry_days_long: [1, 2, 3]
   entry_days_short: [1, 2, 3]
-  exit_days_long:   [1, 2, 3]
-  exit_days_short:  [1, 2, 3]
+  exit_days_long:   [1, 2]
+  exit_days_short:  [1, 2]
 
 hybrid20_exclusions: []
 

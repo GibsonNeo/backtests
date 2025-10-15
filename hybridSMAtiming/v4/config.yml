@@ -1,0 +1,41 @@
+hybrid20_defaults:
+  long_window: 200
+  short_window: 20
+  entry_days: 2
+  entry_days_long: 2
+  entry_days_short: 2
+  exit_days_long: 2
+  exit_days_short: 1
+
+# hybrid20_grids:
+#   long_windows: [150, 200, 250]
+#   short_windows: [10, 15, 20, 30]
+#   #cooldown_days: [0, 1, 2]
+
+#   entry_days_long: [1, 2, 3]
+#   entry_days_short: [1, 2, 3]
+#   exit_days_long:   [1, 2]
+#   exit_days_short:  [1, 2]
+
+# hybrid20_exclusions: []
+
+tickers: [IVW, IWF, QQQ, SPY]
+# weights: { IVW: 1.00 }
+
+start: 2019-05-01
+end: 2025-10-01
+outdir: outputs_exit_grid
+
+cash_rate_percent: 0
+sharpe_rf_percent: 0
+
+default_entry_days: 2
+include_baseline_buyhold: true
+write_per_year: false
+
+random_sampling:
+  enabled: false
+  num_samples: 500
+  min_years: 10
+  max_years: 10
+  random_seed: 45
