@@ -1,0 +1,14 @@
+# Required
+ticker: SPY
+start: 2015-01-01
+end: 2025-10-13
+
+# Optional
+windows: [50, 100, 150, 200, 250]
+regime_window: 250
+
+# shown in peak and length summaries
+percentiles: [25, 50, 75, 90]
+
+# New, which SMAs to summarize in the simple interpretation
+simple_summary_windows: [150, 200]
