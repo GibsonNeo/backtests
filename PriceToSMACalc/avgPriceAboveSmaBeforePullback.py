@@ -284,6 +284,26 @@ def build_percentile_frame(results: Dict[int, Dict[str, Any]], windows: List[int
     return df.sort_index()
 
 
+def build_gap_frame(results: Dict[int, Dict[str, Any]], windows: List[int]) -> pd.DataFrame:
+    """
+    Assemble a dataframe of percent gap values for each SMA window.
+    """
+    series_list = []
+    for w in windows:
+        entry = results.get(w)
+        if not entry:
+            continue
+        gap_series = entry.get("gap_series")
+        if gap_series is None or gap_series.empty:
+            continue
+        series_list.append(gap_series.rename(f"SMA {w}"))
+    if not series_list:
+        return pd.DataFrame()
+    df = pd.concat(series_list, axis=1)
+    df = df.dropna(how="all")
+    return df.sort_index()
+
+
 def plot_sma_percentiles(results: Dict[int, Dict[str, Any]],
                          windows: List[int],
                          out_dir: str,
@@ -327,6 +347,48 @@ def plot_sma_percentiles(results: Dict[int, Dict[str, Any]],
         fig.tight_layout()
         sma_label = col.lower().replace(" ", "_")
         fig.savefig(out_path / f"{sma_label}_percentile.png", dpi=150)
+        plt.close(fig)
+
+
+def plot_gap_series(results: Dict[int, Dict[str, Any]],
+                    windows: List[int],
+                    out_dir: str,
+                    months: int) -> None:
+    if plt is None:
+        raise RuntimeError("matplotlib is not available, install with pip install matplotlib")
+    df = build_gap_frame(results, windows)
+    if df.empty:
+        return
+
+    out_path = Path(out_dir) / "gap_pct"
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    months = max(months, 1)
+    cutoff = df.index.max() - pd.DateOffset(months=months)
+    recent = df[df.index >= cutoff]
+    if recent.empty:
+        recent = df.tail(1)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    for col in recent.columns:
+        ax.plot(recent.index, recent[col], label=col)
+    ax.set_title(f"Price/SMA gap percent (last {months} months)")
+    ax.set_ylabel("Gap (%)")
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    ax.legend(loc="best")
+    fig.savefig(out_path / "sma_gap_combined.png", dpi=150)
+    plt.close(fig)
+
+    for col in recent.columns:
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.plot(recent.index, recent[col], color="tab:orange")
+        ax.set_title(f"{col} gap percent (last {months} months)")
+        ax.set_ylabel("Gap (%)")
+        fig.autofmt_xdate()
+        fig.tight_layout()
+        sma_label = col.lower().replace(" ", "_")
+        fig.savefig(out_path / f"{sma_label}_gap.png", dpi=150)
         plt.close(fig)
 
 
@@ -424,7 +486,8 @@ def main():
         if selected_windows:
             try:
                 plot_sma_percentiles(res, selected_windows, plot_dir, plot_months)
-                print(f"Saved percentile charts to {plot_dir}")
+                plot_gap_series(res, selected_windows, plot_dir, plot_months)
+                print(f"Saved percentile and gap charts to {plot_dir}")
             except RuntimeError as exc:
                 print(f"Plotting skipped: {exc}")
         else:
