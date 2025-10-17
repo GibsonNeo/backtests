@@ -14,7 +14,8 @@ Features
 
 import argparse
 import os
-from typing import List, Dict, Tuple, Any
+from pathlib import Path
+from typing import List, Dict, Any
 import numpy as np
 import pandas as pd
 
@@ -27,6 +28,11 @@ try:
     import yfinance as yf
 except Exception:
     yf = None
+
+try:
+    import matplotlib.pyplot as plt
+except Exception:
+    plt = None
 
 
 def load_config(path: str) -> Dict[str, Any]:
@@ -223,7 +229,9 @@ def analyze(ticker: str, start: str, end: str, windows: List[int],
         last_dt = price.index[-1]
         p_now = float(price.iloc[-1])
         s_now = float(sma_w.iloc[-1]) if np.isfinite(sma_w.iloc[-1]) else np.nan
-        gap_now = float((p_now - s_now) / s_now * 100.0) if np.isfinite(s_now) and s_now != 0.0 else np.nan
+        gap_series = (price - sma_w) / sma_w * 100.0
+        gap_series = gap_series.replace([np.inf, -np.inf], np.nan)
+        gap_now = float(gap_series.iloc[-1]) if np.isfinite(gap_series.iloc[-1]) else np.nan
 
         if len(peak_list) > 0 and np.isfinite(gap_now):
             arr = np.asarray(peak_list, dtype=float)
@@ -239,6 +247,7 @@ def analyze(ticker: str, start: str, end: str, windows: List[int],
             "runs": runs,
             "peak_stats": peak_stats,
             "length_stats": len_stats,
+            "gap_series": gap_series,
             "now": {
                 "date": str(last_dt.date()),
                 "price": p_now,
@@ -252,6 +261,75 @@ def analyze(ticker: str, start: str, end: str, windows: List[int],
     return results
 
 
+def build_percentile_frame(results: Dict[int, Dict[str, Any]], windows: List[int]) -> pd.DataFrame:
+    """
+    Assemble a dataframe of percentile ranks for each SMA window.
+    Percentile rank is computed using the full sample.
+    """
+    series_list = []
+    for w in windows:
+        entry = results.get(w)
+        if not entry:
+            continue
+        gap_series = entry.get("gap_series")
+        if gap_series is None or gap_series.empty:
+            continue
+        perc_series = gap_series.rank(pct=True, method="max") * 100.0
+        perc_series = perc_series.rename(f"SMA {w}")
+        series_list.append(perc_series)
+    if not series_list:
+        return pd.DataFrame()
+    df = pd.concat(series_list, axis=1)
+    df = df.dropna(how="all")
+    return df.sort_index()
+
+
+def plot_sma_percentiles(results: Dict[int, Dict[str, Any]],
+                         windows: List[int],
+                         out_dir: str,
+                         months: int) -> None:
+    if plt is None:
+        raise RuntimeError("matplotlib is not available, install with pip install matplotlib")
+    df = build_percentile_frame(results, windows)
+    if df.empty:
+        return
+
+    out_path = Path(out_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    months = max(months, 1)
+    cutoff = df.index.max() - pd.DateOffset(months=months)
+    recent = df[df.index >= cutoff]
+    if recent.empty:
+        recent = df.tail(1)
+
+    # Combined plot
+    fig, ax = plt.subplots(figsize=(10, 6))
+    for col in recent.columns:
+        ax.plot(recent.index, recent[col], label=col)
+    ax.set_title(f"Price/SMA gap percentile (last {months} months)")
+    ax.set_ylabel("Percentile rank")
+    ax.set_ylim(0, 100)
+    ax.legend(loc="best")
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    fig.savefig(out_path / "sma_percentile_combined.png", dpi=150)
+    plt.close(fig)
+
+    # Individual plots
+    for col in recent.columns:
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.plot(recent.index, recent[col], color="tab:blue")
+        ax.set_title(f"{col} percentile (last {months} months)")
+        ax.set_ylabel("Percentile rank")
+        ax.set_ylim(0, 100)
+        fig.autofmt_xdate()
+        fig.tight_layout()
+        sma_label = col.lower().replace(" ", "_")
+        fig.savefig(out_path / f"{sma_label}_percentile.png", dpi=150)
+        plt.close(fig)
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Average peak percent above SMA until retracement, with stats")
     p.add_argument("--config", default="config.yml", help="Path to config file")
@@ -261,6 +339,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--windows", nargs="+", type=int)
     p.add_argument("--regime_window", type=int)
     p.add_argument("--percentiles", nargs="+", type=float)
+    p.add_argument("--plot_dir", help="Directory to write PNG charts (enables plotting when provided)")
+    p.add_argument("--plot_months", type=int, help="Number of months to display in the percentile charts")
+    p.add_argument("--plot_windows", nargs="+", type=int, help="SMA windows to include in the percentile charts")
     return p.parse_args()
 
 
@@ -274,6 +355,9 @@ def main():
     windows = args.windows or cfg.get("windows", [50, 100, 150, 200])
     regime_window = args.regime_window if args.regime_window is not None else cfg.get("regime_window", 200)
     percentiles = args.percentiles or cfg.get("percentiles", [25, 50, 75, 90])
+    plot_dir = args.plot_dir or cfg.get("plot_dir")
+    plot_months = args.plot_months if args.plot_months is not None else cfg.get("plot_months", 6)
+    plot_windows = args.plot_windows or cfg.get("plot_windows", [20, 50, 100, 200])
 
     if not ticker or not start or not end:
         raise ValueError("Config is missing required keys, provide ticker, start, end")
@@ -335,6 +419,16 @@ def main():
             print("  Potential downside pct: N/A")
         print("")
 
+    if plot_dir:
+        selected_windows = [w for w in plot_windows if w in res]
+        if selected_windows:
+            try:
+                plot_sma_percentiles(res, selected_windows, plot_dir, plot_months)
+                print(f"Saved percentile charts to {plot_dir}")
+            except RuntimeError as exc:
+                print(f"Plotting skipped: {exc}")
+        else:
+            print("Plotting skipped: no overlap between requested plot windows and analysis windows")
 
 
 if __name__ == "__main__":
