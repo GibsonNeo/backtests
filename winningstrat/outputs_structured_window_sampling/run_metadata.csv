@@ -1,0 +1,2 @@
+strategy,tickers,configured_shared_start,actual_shared_start,actual_shared_end,configured_end,window_lengths_years,step_fraction_of_length,append_tail_window,max_overlap_fraction_for_tail,total_windows,rank_sharpe_weight,rank_cagr_weight
+hybridL200_S20_eL3_eS2_xL2_xS1,"DGRO,DGRW,EQWL,SPHQ,QQQ,SCHG,IWY,SPMO",2015-10-09,2015-10-12,2026-03-26,2026-03-26,"3,5,7,10",0.5,True,0.6,12,0.6,0.4

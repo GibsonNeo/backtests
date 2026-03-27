@@ -107,3 +107,52 @@ Note: these rankings are based on average performance across shared random windo
 | SCHG | 0.865 | 14.96% | 0.855 | 18.13% | +0.010 | -3.18% | 53% | 4% |
 | SPHQ | 0.937 | 11.62% | 0.786 | 14.03% | +0.151 | -2.41% | 88% | 4% |
 | SPMO | 1.007 | 14.38% | 0.855 | 17.01% | +0.152 | -2.63% | 92% | 4% |
+
+## Structured Rolling Window Rank
+
+This section uses a deterministic shared-date window set rather than random windows:
+
+- Tickers: `DGRO, DGRW, EQWL, SPHQ, QQQ, SCHG, IWY, SPMO`
+- Configured shared start: `2015-10-09`
+- Actual first shared trading date used: `2015-10-12`
+- Dynamic end date used for this run: `2026-03-26`
+- Fixed length buckets: `3y, 5y, 7y, 10y`
+- Step size within each bucket: about `50%` of the bucket length
+- Tail window rule: include an end-anchored window only if overlap stays at or below `60%`
+- Total windows: `12`
+- Bucket counts: `6x 3y`, `3x 5y`, `2x 7y`, `1x 10y`
+- Data sources: `outputs_structured_window_sampling/structured_windows.csv` and `outputs_structured_window_sampling/ticker_ranking_vs_buyhold.csv`
+- Combined rank formula: `60% delta-Sharpe rank + 40% delta-CAGR rank`
+- Lower combined score is better
+
+Note: the overall ticker summary is built by averaging the `3y`, `5y`, `7y`, and `10y` bucket summaries equally, so shorter buckets do not dominate just because they have more windows.
+
+| Rank | Ticker | Strategy Sharpe | Strategy CAGR | Buy/Hold Sharpe | Buy/Hold CAGR | Avg Sharpe Delta | Avg CAGR Delta | Sharpe Beat Rate | CAGR Beat Rate | Combined Score |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | QQQ | 0.967 | 15.83% | 0.857 | 18.31% | +0.110 | -2.48% | 75% | 25% | 1.6 |
+| 2 | SPMO | 1.000 | 13.88% | 0.869 | 16.63% | +0.131 | -2.75% | 83% | 17% | 1.8 |
+| 3 | IWY | 0.982 | 14.96% | 0.875 | 17.62% | +0.107 | -2.66% | 71% | 17% | 2.6 |
+| 4 | EQWL | 0.872 | 9.87% | 0.796 | 12.89% | +0.076 | -3.03% | 75% | 25% | 4.0 |
+| 5 | SPHQ | 0.862 | 10.28% | 0.786 | 13.35% | +0.076 | -3.07% | 75% | 12% | 5.4 |
+| 6 | SCHG | 0.818 | 13.45% | 0.811 | 16.51% | +0.007 | -3.06% | 67% | 12% | 6.2 |
+| 7 | DGRO | 0.813 | 8.62% | 0.779 | 12.32% | +0.034 | -3.70% | 75% | 0% | 6.4 |
+| 8 | DGRW | 0.802 | 8.45% | 0.829 | 13.00% | -0.027 | -4.55% | 54% | 0% | 8.0 |
+
+## Structured Rolling Window Vs Buy/Hold
+
+| Ticker | Strategy Sharpe | Strategy CAGR | Buy/Hold Sharpe | Buy/Hold CAGR | Avg Sharpe Delta | Avg CAGR Delta | Sharpe Beat Rate | CAGR Beat Rate |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| DGRO | 0.813 | 8.62% | 0.779 | 12.32% | +0.034 | -3.70% | 75% | 0% |
+| DGRW | 0.802 | 8.45% | 0.829 | 13.00% | -0.027 | -4.55% | 54% | 0% |
+| EQWL | 0.872 | 9.87% | 0.796 | 12.89% | +0.076 | -3.03% | 75% | 25% |
+| IWY | 0.982 | 14.96% | 0.875 | 17.62% | +0.107 | -2.66% | 71% | 17% |
+| QQQ | 0.967 | 15.83% | 0.857 | 18.31% | +0.110 | -2.48% | 75% | 25% |
+| SCHG | 0.818 | 13.45% | 0.811 | 16.51% | +0.007 | -3.06% | 67% | 12% |
+| SPHQ | 0.862 | 10.28% | 0.786 | 13.35% | +0.076 | -3.07% | 75% | 12% |
+| SPMO | 1.000 | 13.88% | 0.869 | 16.63% | +0.131 | -2.75% | 83% | 17% |
+
+## Structured Window Notes
+
+- The strategy was weakest in the `3y` bucket for the top growth tickers. For example, `QQQ`, `IWY`, and `SPMO` all had negative average Sharpe deltas in the `3y` windows.
+- The strategy improved materially in the `5y`, `7y`, and `10y` buckets, which is why the structured ranking is more favorable to `QQQ`, `SPMO`, and `IWY` than the random-window ranking.
+- `DGRW` remained the weakest fit in this structured test because it trailed buy/hold on both average Sharpe and average CAGR.
