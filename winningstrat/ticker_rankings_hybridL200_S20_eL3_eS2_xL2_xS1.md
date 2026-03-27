@@ -64,3 +64,46 @@ Note: each ticker uses its own full available history from its configured incept
 | 7 | DGRW | 9.55% | 0.890 |
 | 8 | DGRO | 9.53% | 0.888 |
 | 9 | SPHQ | 7.98% | 0.659 |
+
+## Shared Random Sampling Rank
+
+This section uses the same strategy on a revised ticker set with shared-date random windows:
+
+- Tickers: `DGRO, DGRW, EQWL, SPHQ, QQQ, SCHG, IWY, SPMO`
+- Removed: `AUSF`
+- Replaced: `QQQM` with `QQQ`
+- Configured shared start: `2015-10-09`
+- Actual first shared trading date used: `2015-10-12`
+- Dynamic end date used for this run: `2026-03-26`
+- Sample count: `100`
+- Sample length range: about `3.06` to `10.43` years
+- Average sample length: about `6.77` years
+- Data sources: `outputs_common_random_sampling/sample_windows.csv` and `outputs_common_random_sampling/ticker_ranking_vs_buyhold.csv`
+- Combined rank formula: `60% delta-Sharpe rank + 40% delta-CAGR rank`
+- Lower combined score is better
+
+Note: these rankings are based on average performance across shared random windows, not per-ticker full-history since inception.
+
+| Rank | Ticker | Strategy Sharpe | Strategy CAGR | Buy/Hold Sharpe | Buy/Hold CAGR | Avg Sharpe Delta | Avg CAGR Delta | Sharpe Beat Rate | CAGR Beat Rate | Combined Score |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | SPHQ | 0.937 | 11.62% | 0.786 | 14.03% | +0.151 | -2.41% | 88% | 4% | 1.6 |
+| 2 | SPMO | 1.007 | 14.38% | 0.855 | 17.01% | +0.152 | -2.63% | 92% | 4% | 1.8 |
+| 3 | IWY | 1.030 | 16.47% | 0.905 | 18.96% | +0.125 | -2.49% | 83% | 7% | 2.6 |
+| 4 | EQWL | 0.903 | 10.64% | 0.799 | 13.51% | +0.105 | -2.87% | 86% | 4% | 4.4 |
+| 5 | QQQ | 0.992 | 16.97% | 0.893 | 19.83% | +0.099 | -2.86% | 82% | 12% | 4.6 |
+| 6 | DGRO | 0.820 | 9.10% | 0.757 | 12.65% | +0.063 | -3.55% | 79% | 2% | 6.4 |
+| 7 | SCHG | 0.865 | 14.96% | 0.855 | 18.13% | +0.010 | -3.18% | 53% | 4% | 6.6 |
+| 8 | DGRW | 0.828 | 9.14% | 0.828 | 13.68% | -0.000 | -4.54% | 59% | 0% | 8.0 |
+
+## Shared Random Sampling Vs Buy/Hold
+
+| Ticker | Strategy Sharpe | Strategy CAGR | Buy/Hold Sharpe | Buy/Hold CAGR | Avg Sharpe Delta | Avg CAGR Delta | Sharpe Beat Rate | CAGR Beat Rate |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| DGRO | 0.820 | 9.10% | 0.757 | 12.65% | +0.063 | -3.55% | 79% | 2% |
+| DGRW | 0.828 | 9.14% | 0.828 | 13.68% | -0.000 | -4.54% | 59% | 0% |
+| EQWL | 0.903 | 10.64% | 0.799 | 13.51% | +0.105 | -2.87% | 86% | 4% |
+| IWY | 1.030 | 16.47% | 0.905 | 18.96% | +0.125 | -2.49% | 83% | 7% |
+| QQQ | 0.992 | 16.97% | 0.893 | 19.83% | +0.099 | -2.86% | 82% | 12% |
+| SCHG | 0.865 | 14.96% | 0.855 | 18.13% | +0.010 | -3.18% | 53% | 4% |
+| SPHQ | 0.937 | 11.62% | 0.786 | 14.03% | +0.151 | -2.41% | 88% | 4% |
+| SPMO | 1.007 | 14.38% | 0.855 | 17.01% | +0.152 | -2.63% | 92% | 4% |

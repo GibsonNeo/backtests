@@ -1,0 +1,2 @@
+strategy,tickers,configured_shared_start,actual_shared_start,actual_shared_end,configured_end,num_windows,min_years,max_years,random_seed,rank_sharpe_weight,rank_cagr_weight
+hybridL200_S20_eL3_eS2_xL2_xS1,"DGRO,DGRW,EQWL,SPHQ,QQQ,SCHG,IWY,SPMO",2015-10-09,2015-10-12,2026-03-26,2026-03-26,100,3.0,auto,49,0.6,0.4

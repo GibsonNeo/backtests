@@ -1,0 +1,37 @@
+tickers:
+  - DGRO
+  - DGRW
+  - EQWL
+  - SPHQ
+  - QQQ
+  - SCHG
+  - IWY
+  - SPMO
+
+shared_start: 2015-10-09
+end: yesterday
+outdir: outputs_common_random_sampling
+
+cash_rate_percent: 0
+sharpe_rf_percent: 0
+
+strategy:
+  name: hybridL200_S20_eL3_eS2_xL2_xS1
+  kind: hybrid
+  long_window: 200
+  short_window: 20
+  entry_days_long: 3
+  entry_days_short: 2
+  exit_days_long: 2
+  exit_days_short: 1
+  note: Original winning strategy, zero-cash while out.
+
+random_sampling:
+  num_samples: 100
+  min_years: 3
+  max_years: auto
+  random_seed: 49
+
+ranking_weights:
+  sharpe: 0.6
+  cagr: 0.4
