@@ -1,0 +1,93 @@
+tickers:
+  - DGRO
+  - DGRW
+  - AUSF
+  - EQWL
+  - SPHQ
+  - QQQM
+  - SCHG
+  - IWY
+  - SPMO
+
+ticker_inceptions:
+  DGRO: 2014-06-10
+  DGRW: 2013-05-22
+  AUSF: 2018-08-24
+  EQWL: 2006-12-01
+  SPHQ: 2005-12-06
+  QQQM: 2020-10-13
+  SCHG: 2009-12-11
+  IWY: 2009-09-22
+  SPMO: 2015-10-09
+
+ticker_inception_source_urls:
+  DGRO: https://www.ishares.com/ch/professionals/en/products/264623/ishares-core-dividend-growth-etf
+  DGRW: https://www.wisdomtree.com/-/media/us-media-files/documents/resource-library/fund-fact-sheets/us-equity/wisdomtree-dgrw_factsheet-1910.pdf
+  AUSF: https://www.globalxetfs.com/funds/ausf
+  EQWL: https://www.invesco.com/us/financial-products/etfs/product-detail?productId=ETF-EQWL
+  SPHQ: https://www.invesco.com/us/financial-products/etfs/product-detail?productId=ETF-SPHQ
+  QQQM: https://www.invesco.com/content/dam/invesco/us/en/product-documents/etf/fact-sheet/qqqm-invesco-nasdaq-100-etf-fact-sheet.pdf
+  SCHG: https://www.schwabassetmanagement.com/products/schg
+  IWY: https://www.ishares.com/us/products/239705/ishares-russell-top-200-growth-etf
+  SPMO: https://www.invesco.com/us/financial-products/etfs/product-detail?productId=ETF-SPMO
+
+selected_variants:
+  - name: hybridL200_S20_eL3_eS2_xL2_xS1
+    kind: hybrid
+    long_window: 200
+    short_window: 20
+    entry_days_long: 3
+    entry_days_short: 2
+    exit_days_long: 2
+    exit_days_short: 1
+    note: Current zero-cash benchmark.
+
+  - name: hybridL200_S20_eL3_eS2_xL2_xS1_SHY
+    kind: hybrid
+    long_window: 200
+    short_window: 20
+    entry_days_long: 3
+    entry_days_short: 2
+    exit_days_long: 2
+    exit_days_short: 1
+    out_of_market_ticker: SHY
+    note: Same signals, park in SHY instead of cash when out.
+
+  - name: hybridL200_S20_eL2_eS2_xL2_xS1_SHY
+    kind: hybrid
+    long_window: 200
+    short_window: 20
+    entry_days_long: 2
+    entry_days_short: 2
+    exit_days_long: 2
+    exit_days_short: 1
+    out_of_market_ticker: SHY
+    note: Faster bull entry plus SHY parking asset.
+
+  - name: hybridL150_S20_eL3_eS2_xL2_xS1
+    kind: hybrid
+    long_window: 150
+    short_window: 20
+    entry_days_long: 3
+    entry_days_short: 2
+    exit_days_long: 2
+    exit_days_short: 1
+    note: Shorter long filter benchmark.
+
+  - name: hybridL150_S20_eL3_eS2_xL2_xS1_SHY
+    kind: hybrid
+    long_window: 150
+    short_window: 20
+    entry_days_long: 3
+    entry_days_short: 2
+    exit_days_long: 2
+    exit_days_short: 1
+    out_of_market_ticker: SHY
+    note: Shorter long filter plus SHY parking asset.
+
+end: 2026-03-27
+cash_rate_percent: 0.0
+sharpe_rf_percent: 0.0
+include_baseline_buyhold: true
+run_common_overlap: true
+outdir: outputs_cagr_search
