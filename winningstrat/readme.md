@@ -1,3 +1,18 @@
+## BEST WINNING STRAT
+
+If SMA20 >= SMA200:
+    Enter after 3 closes above SMA200
+    Exit after 2 closes at/below SMA200
+
+If SMA20 < SMA200:
+    Enter after 3 days where:
+        close > SMA20
+        SMA20 is rising
+    Exit after 1 close at/below SMA20
+
+When out:
+    Hold SGOV
+
 This directory isolates the winning regime-switch strategy and a few close variants.
 
 Signal semantics:

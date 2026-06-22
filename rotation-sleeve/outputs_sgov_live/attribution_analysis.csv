@@ -1,0 +1,7 @@
+component_proxy,comparison,estimated_cagr_delta
+trend_filter_plus_IEF_on_CEFs,A_original_cefs_ief CAGR minus CEF_equal_weight_buy_hold CAGR,-0.060255684043048374
+IEF_duration_exposure,A_original_cefs_ief CAGR minus B_original_cefs_bil CAGR,-0.012692831312359765
+CEF_selection_vs_broad_etfs_with_IEF,A_original_cefs_ief CAGR minus C_etfs_ief CAGR,0.027199225497543278
+CEF_selection_vs_broad_etfs_without_duration,B_original_cefs_bil CAGR minus D_etfs_bil CAGR,0.03173891706341814
+SGOV_vs_BIL_defensive_asset,B2_original_cefs_sgov CAGR minus B_original_cefs_bil CAGR,0.0005234914121923229
+distribution_capture,Implicitly included through Yahoo adjusted close total return data; not separately decomposed without price-only NAV/market data.,
