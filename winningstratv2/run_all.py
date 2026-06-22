@@ -45,6 +45,8 @@ def main():
     survivors = [t for t in t1[t1["survivor"] == 1]["ticker"] if t in cache]
 
     t2 = rob.run_robustness(cfg, cache, survivors, theme_of)
+    t2_fh = rob.run_full_history_robustness(cfg, cache, survivors, theme_of)
+    t2 = rob.attach_full_history(t2, t2_fh)
     t2.to_csv(outdir / "tier2_robustness.csv", index=False)
     fin = rob.finalists(t2, cfg)
     fin = [t for t in fin if t in cache]
@@ -72,16 +74,38 @@ def main():
     top = t3.head(int(cfg["tier3"]["top_n_report"]))
     inc_combo = ",".join(inc)
     inc_row = t3[t3["combo"] == inc_combo]
+    n_fin = int(cfg["n_finalists"])
+    ss, se = t2.attrs.get("shared_start"), t2.attrs.get("shared_end")
+    shared_years = round((pd.Timestamp(se) - pd.Timestamp(ss)).days / 365.25, 1)
+    fin_tbl = t2.head(n_fin)
+    n_shallow = int(fin_tbl["shallow_history"].sum())
+    fh_view = fin_tbl.sort_values("fh_avg_sharpe_delta", ascending=False)
     lines = ["# winningstratv2 — Ticker-Swap Study Report", "",
              f"Universe screened: {len(t1)} tickers. Survivors to Tier 2: {len(survivors)}. "
              f"Finalists to Tier 3: {len(fin)}.",
-             f"Tier-2 shared window: {t2.attrs.get('shared_start')} to {t2.attrs.get('shared_end')}.", "",
+             f"Tier-2 shared window: {ss} to {se} (~{shared_years}y).", "",
+             "> **How to read the robustness:** the finalist ranking is judged on the "
+             f"shared window above, which is the same for every ticker (fair across ages) but "
+             f"**excludes pre-{str(ss)[:4]} bears** such as the 2008 GFC and dot-com. "
+             f"{n_shallow} of the top {n_fin} finalists have shallow history (no GFC coverage) "
+             "and are flagged `covers_gfc=False`. The **Full-history robustness** section "
+             "re-scores each finalist over its own complete history as a deep-regime "
+             "reality check — a finalist that ranks well in *both* views is the most "
+             "trustworthy; one that wins only on the shallow shared window is suspect.", "",
              "## Top individual candidates (Tier 1, by combined rank)", "",
              t1.head(15)[["combined_rank", "ticker", "theme", "strat_sharpe", "strat_cagr",
                           "sharpe_delta", "cagr_delta"]].to_markdown(index=False), "",
-             "## Robustness finalists (Tier 2)", "",
-             t2.head(int(cfg["n_finalists"]))[["robust_rank", "ticker", "theme", "avg_sharpe_delta",
-                          "sharpe_beat_rate", "cagr_beat_rate"]].to_markdown(index=False), "",
+             "## Robustness finalists (Tier 2, shared window)", "",
+             fin_tbl[["robust_rank", "ticker", "theme", "avg_sharpe_delta",
+                      "sharpe_beat_rate", "cagr_beat_rate", "history_years",
+                      "covers_gfc"]].to_markdown(index=False), "",
+             "## Full-history robustness (deep-regime reality check)", "",
+             f"Same finalists, re-scored over each ticker's OWN full history "
+             f"(includes 2008/dot-com for tickers old enough), ordered by full-history avg "
+             f"Sharpe delta. Compare against the shared-window order above.", "",
+             fh_view[["ticker", "theme", "history_years", "covers_gfc", "fh_windows",
+                      "fh_avg_sharpe_delta", "fh_sharpe_beat_rate",
+                      "fh_cagr_beat_rate"]].to_markdown(index=False), "",
              "## Best 4-sleeve combos (Tier 3)", "",
              top[["combo_rank", "combo", "sharpe", "cagr", "maxdd", "calmar", "avg_corr",
                   "blended_score"]].to_markdown(index=False), ""]

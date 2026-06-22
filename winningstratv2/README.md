@@ -22,15 +22,24 @@ Out of market: hold SGOV (BIL before SGOV's 2023 inception), identical for every
 
 ## Outputs (in `outputs/`)
 - `tier1_screen.csv` — per-ticker full-span strat vs buy-hold, themed, ranked, survivor flag.
-- `tier2_robustness.csv` — cross-window avg deltas + beat-rates; finalists.
+- `tier2_robustness.csv` — shared-window avg deltas + beat-rates (the finalist selector),
+  PLUS a full-history pass (`fh_*` columns) scoring each ticker over its own complete history,
+  `history_years`, `covers_gfc`, and a `shallow_history` flag.
 - `tier3_combos.csv` — every 4-sleeve combo ranked by blended robust score, with avg pairwise correlation.
-- `report.md` — narrative with the incumbents as the explicit bar to beat.
+- `report.md` — narrative with the incumbents as the explicit bar to beat, a
+  "Full-history robustness (deep-regime reality check)" section, and a how-to-read caveat.
 - `charts/` — best combo vs incumbents equity + drawdown.
 
 ## Anti-overfitting
 Strategy is fixed; only tickers vary. Finalists are chosen by cross-window beat-rate
 (not a single full-span estimate); newer tickers are judged on shared windows; combos
 are reported top-N (not one) with a correlation guard; incumbents are the benchmark.
+
+**Read the two robustness views together.** The shared-window pass is fair across ticker
+ages but its window is only as deep as the *youngest* survivor's history, so it can exclude
+major bears (2008 GFC, dot-com). The full-history pass re-scores each finalist over its own
+complete history and flags `covers_gfc=False` tickers. A finalist that ranks well in *both*
+views is trustworthy; one that wins only on the shallow shared window is suspect.
 
 ## Tests
     .venv/bin/python -m pytest tests/ -q

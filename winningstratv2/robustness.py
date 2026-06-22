@@ -264,6 +264,70 @@ def run_robustness(cfg: dict, cache: dict, survivors: list, theme_of: dict) -> p
     return summary
 
 
+# Lehman collapse -- a ticker whose history starts on/before this date was tradable
+# through the 2008 Global Financial Crisis bear, the deepest regime in the sample.
+GFC_DATE = pd.Timestamp("2008-09-01")
+
+
+def run_full_history_robustness(cfg: dict, cache: dict, tickers: list, theme_of: dict) -> pd.DataFrame:
+    """Companion to run_robustness: scores each ticker over its OWN full history
+    (variable per-ticker windows) so older tickers are credited/blamed over the
+    deep regimes (2008 GFC, dot-com) that the shared-window pass necessarily
+    excludes. Informational only -- does NOT drive finalist selection."""
+    t2 = cfg["tier2"]
+    variant = cfg["fixed_variant"]
+    end = pd.Timestamp(date.today() if str(cfg.get("end", "today")).lower() == "today" else cfg["end"])
+    cash_daily = core.build_cash_chain(cache[cfg["cash_chain"][0]]["tr"], cache[cfg["cash_chain"][1]]["tr"])
+
+    rows = []
+    for t in tickers:
+        own_idx = cache[t]["tr"].loc[:end].index.sort_values()
+        if len(own_idx) == 0:
+            continue
+        own_start, own_end = own_idx.min(), own_idx.max()
+        try:
+            rand_windows = generate_random_windows(own_idx, t2["random_samples"], t2["random_min_years"],
+                                                   t2["random_max_years"], t2.get("random_seed"))
+        except ValueError:
+            rand_windows = pd.DataFrame(columns=["start", "end"])
+        struct_windows = generate_structured_windows(own_idx, t2["structured_buckets"],
+                                                     t2["structured_step_fraction"], True, t2["structured_tail_overlap"])
+        all_windows = pd.concat([rand_windows, struct_windows], ignore_index=True)
+        if all_windows.empty:
+            continue
+        recs = []
+        for w in all_windows.itertuples(index=False):
+            recs.extend(_eval_window(cache, [t], variant, cash_daily,
+                                     pd.Timestamp(w.start), pd.Timestamp(w.end)))
+        if not recs:
+            continue
+        per = pd.DataFrame(recs)
+        rows.append({
+            "ticker": t,
+            "theme": theme_of.get(t),
+            "fh_start": own_start.strftime("%Y-%m-%d"),
+            "history_years": round((own_end - own_start).days / 365.25, 1),
+            "fh_windows": int(len(per)),
+            "fh_avg_sharpe_delta": per["sharpe_delta"].mean(),
+            "fh_avg_cagr_delta": per["cagr_delta"].mean(),
+            "fh_sharpe_beat_rate": per["beat_sharpe"].mean(),
+            "fh_cagr_beat_rate": per["beat_cagr"].mean(),
+            "covers_gfc": bool(own_start <= GFC_DATE),
+        })
+    return pd.DataFrame(rows)
+
+
+def attach_full_history(shared_summary: pd.DataFrame, fh_df: pd.DataFrame) -> pd.DataFrame:
+    """Left-join the full-history columns onto the shared-window summary, preserving
+    its rank order and attrs, and flag rows whose robustness is shallow (history does
+    not reach the 2008 GFC bear -- so the shared-window verdict is the only evidence)."""
+    fh_cols = [c for c in fh_df.columns if c not in ("theme",)]
+    merged = shared_summary.merge(fh_df[fh_cols], on="ticker", how="left")
+    merged["shallow_history"] = (~merged["covers_gfc"].fillna(False)).astype(int)
+    merged.attrs.update(shared_summary.attrs)
+    return merged
+
+
 def finalists(summary: pd.DataFrame, cfg: dict) -> list:
     n = int(cfg.get("n_finalists", 12))
     picks = summary.head(n)["ticker"].tolist()
@@ -282,7 +346,10 @@ def main():
     survivors = t1[t1["survivor"] == 1]["ticker"].tolist()
     theme_of = scr.flatten_universe(cfg)
     cache = scr.build_cache(sorted(set(survivors) | set(cfg["cash_chain"])), scr._resolve_end(cfg.get("end")))
-    summary = run_robustness(cfg, cache, [t for t in survivors if t in cache], theme_of)
+    live = [t for t in survivors if t in cache]
+    summary = run_robustness(cfg, cache, live, theme_of)
+    fh = run_full_history_robustness(cfg, cache, live, theme_of)
+    summary = attach_full_history(summary, fh)
     summary.to_csv(outdir / "tier2_robustness.csv", index=False)
     print(f"Saved {outdir/'tier2_robustness.csv'}  finalists: {finalists(summary, cfg)}")
 
