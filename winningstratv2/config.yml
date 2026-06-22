@@ -1,0 +1,57 @@
+# Locked "best winning strat" variant (matches winningstrat/readme.md top section).
+fixed_variant:
+  name: "200SMA_3in_2out_hybrid20SMA"
+  kind: hybrid
+  long_window: 200
+  short_window: 20
+  entry_days_long: 3
+  entry_days_short: 3
+  exit_days_long: 2
+  exit_days_short: 1
+
+# Out-of-market holding: SGOV when it exists, BIL before it. Same for every ticker.
+cash_chain: [SGOV, BIL]
+
+end: today
+outdir: outputs
+
+# Tier 1 -> Tier 2 gate.
+min_history_days: 1500        # ~6 years of trading days
+gate_require_positive_sharpe_delta: true
+
+# Tier 2 (cross-window robustness).
+tier2:
+  shared_start: auto          # auto = max inception across survivors; or an explicit YYYY-MM-DD
+  random_samples: 100
+  random_min_years: 3
+  random_max_years: auto
+  random_seed: 49
+  structured_buckets: [3, 5, 7, 10]
+  structured_step_fraction: 0.5
+  structured_tail_overlap: 0.6
+  rank_sharpe_weight: 0.6
+  rank_cagr_weight: 0.4
+
+# Tier 2 -> Tier 3.
+n_finalists: 12
+
+# Tier 3 (4-sleeve combo search).
+tier3:
+  combo_size: 4
+  score_weights: {sharpe: 0.5, cagr: 0.3, maxdd: 0.2}
+  top_n_report: 10
+
+incumbents: [SPMO, IWY, QQQ, DGRW]
+
+universe:
+  incumbent:       [SPMO, IWY, QQQ, DGRW]
+  momentum:        [MTUM, PDP, FDMO, XMMO, QMOM, VFMO, JMOM]
+  large_growth:    [SCHG, VUG, IWF, MGK, SPYG, VONG, IUSG, XLG, MGC]
+  tech:            [VGT, XLK, IYW, FTEC, IGM, SOXX, SMH, IGV]
+  quality:         [QUAL, SPHQ, JQUA, DGRO, GSLC]
+  dividend_growth: [SCHD, VIG, NOBL, RDVY]
+  multifactor:     [OMFL, LRGF, DSTL, SPGP]
+  broad_control:   [RSP, EQWL, SPY, OEF]
+  midcap_growth:   [IWP, VOT, ARKK]
+  sector:          [XLY, XLV, XLF, XLI, XLP, XLU, XLE, XLB, XLRE, XLC, XBI, ITA, GLD]
+  international:   [EFA, VEA, EFG, IMTM, IQLT, VWO, VEU, INDA, EWT]
